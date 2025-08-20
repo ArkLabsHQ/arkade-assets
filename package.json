@@ -1,0 +1,22 @@
+{
+  "name": "arkass",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test-indexer.js",
+    "indexer:init": "node tools/indexer.js --init",
+    "indexer:apply": "node tools/indexer.js --apply",
+    "indexer:apply-hex": "node tools/indexer.js --apply-hex",
+    "make-tx": "node tools/make-opreturn.js",
+    "make-tx:example": "node tools/make-opreturn.js --example=A",
+    "codec:test": "node tools/arkass-codec.js",
+    "prove-ownership": "node tools/prove-ownership.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+  }
+}
