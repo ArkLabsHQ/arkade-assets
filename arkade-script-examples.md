@@ -368,3 +368,112 @@ Teleport transfers enable complex multi-party protocols where assets need to mov
 - Error messages should be descriptive to aid in debugging contract execution
 
 This integration maintains Arkade Script's familiar syntax while adding powerful asset introspection capabilities that leverage ArkAsset's teleport system for seamless batch swap operations and advanced asset management scenarios.
+
+---
+
+## 4. Synthetic Asset Contract
+
+Based on the "Synthetic asset smart contract for the Liquid network" paper, this contract locks collateral to issue a synthetic asset that tracks a reference price. It includes clauses for redemption by the sponsor, liquidation by the issuer if the collateral value falls, and cooperative re-issuance.
+
+### Synthetic Asset Covenant
+
+This contract manages the locked collateral for a synthetic asset. It has three spending paths:
+
+1.  **Redeem**: The sponsor can redeem their collateral by burning the originally issued synthetic assets after a lock-up period.
+2.  **Liquidate**: The issuer can liquidate the position if the reference price drops below a threshold, using a signature from a trusted oracle.
+3.  **Reissue**: The sponsor and issuer can cooperatively close the current contract to roll the collateral into a new one with updated parameters.
+
+```typescript
+contract SyntheticAssetCovenant(
+    // Parties
+    sponsorPk: PubKey,
+    issuerPk: PubKey,
+    oraclePk: PubKey,
+
+    // Contract terms
+    collateralAsset: AssetId,
+    collateralAmount: bigint,
+    synthAsset: AssetId,
+    synthAmount: bigint,
+    payoutAmount: bigint, // Fee for the issuer on redemption
+
+    // Thresholds
+    liquidationPriceLevel: bigint, // Pre-calculated liquidation price threshold
+    minLockupDuration: int // Minimum time before sponsor can redeem
+) {
+    // Path 1: Sponsor redeems the collateral
+    function redeem(sponsorSig: Sig) {
+        require(checkSig(sponsorSig, sponsorPk));
+        require(tx.age >= minLockupDuration);
+
+        // Verify asset movements using deltas
+        let synthGroup = tx.assets.findGroup(synthAsset);
+        let collateralGroup = tx.assets.findGroup(collateralAsset);
+        require(synthGroup != null && collateralGroup != null, "Asset groups not found");
+
+        // 1. The exact amount of synth must be burned (delta = -synthAmount)
+        require(synthGroup.delta == -synthAmount, "Incorrect synth amount burned");
+
+        // 2. The collateral must be returned, minus the issuer's payout.
+        // This means the total collateral delta must be -payoutAmount.
+        require(collateralGroup.delta == -payoutAmount, "Incorrect collateral payout");
+
+        // 3. A specific output must send the payout to the issuer.
+        // (This check is still needed to ensure the fee goes to the right person).
+        let foundPayout = false;
+        for (int i = 0; i < collateralGroup.outputs.length; i++) {
+            if (collateralGroup.outputs[i].isLocal && 
+                collateralGroup.outputs[i].amount == payoutAmount && 
+                collateralGroup.outputs[i].scriptPubKey.isKnownTemplate(issuerPk)) {
+                foundPayout = true;
+                break;
+            }
+        }
+        require(foundPayout, "Issuer payout not found or incorrect");
+    }
+
+    // Path 2: Issuer liquidates an under-collateralized position
+    function liquidate(issuerSig: Sig, oracleSig: Sig, priceData: bytes) {
+        require(checkSig(issuerSig, issuerPk));
+        require(checkDataSig(oracleSig, sha256(priceData), oraclePk));
+
+        // priceData is a 12-byte block: 4-byte timestamp + 8-byte price level
+        bytes4 timestamp = priceData.slice(0, 4);
+        bytes8 currentPriceLevel = priceData.slice(4, 12);
+
+        // Verify the price is below the liquidation threshold and the oracle signature is fresh
+        require(currentPriceLevel.toInt64() < liquidationPriceLevel, "Price not below liquidation level");
+        require(timestamp.toUint32() >= this.creationTime(), "Oracle signature too old");
+
+        // Find the synthetic asset group
+        let synthGroup = tx.assets.findGroup(synthAsset);
+        require(synthGroup != null, "Synthetic asset not found");
+
+        // Verify the exact amount of synth is burned (delta = -synthAmount)
+        require(synthGroup.delta == -synthAmount, "Incorrect synth amount burned");
+
+        // The collateral is claimed by the issuer, so its delta is -collateralAmount.
+        let collateralGroup = tx.assets.findGroup(collateralAsset);
+        require(collateralGroup != null, "Collateral asset not found");
+        require(collateralGroup.delta == -collateralAmount, "Incorrect collateral amount liquidated");
+    }
+
+    // Path 3: Cooperative re-issuance to a new covenant
+    function reissue(sponsorSig: Sig, issuerSig: Sig) {
+        require(checkSig(sponsorSig, sponsorPk));
+        require(checkSig(issuerSig, issuerPk));
+
+        // Find the synthetic asset group
+        let synthGroup = tx.assets.findGroup(synthAsset);
+        require(synthGroup != null, "Synthetic asset not found");
+
+        // Verify the exact amount of synth is burned (delta = -synthAmount).
+        // The collateral is spent into a new covenant, so its delta is 0.
+        require(synthGroup.delta == -synthAmount, "Incorrect synth amount burned");
+
+        let collateralGroup = tx.assets.findGroup(collateralAsset);
+        require(collateralGroup != null, "Collateral asset not found");
+        require(collateralGroup.delta == 0, "Collateral must be passed to a new covenant");
+    }
+}
+```
