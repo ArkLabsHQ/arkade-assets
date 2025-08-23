@@ -56,13 +56,6 @@ Note (implicit burn policy): If a Bitcoin transaction spends any UTXOs that are 
 Packet := {
   GroupCount    : varuint
   Groups[GroupCount]     : Group
-  UpdateCount   : varuint
-  Updates[UpdateCount] : MetadataUpdate
-}
-
-MetadataUpdate := {
-  AssetRef     : AssetRef,
-  Metadata     : map<string, string>
 }
 ```
 
@@ -76,9 +69,33 @@ Group := {
   InputCount    : varuint
   Inputs[InputCount]  : AssetInput
   OutputCount   : varuint
-  Out[OutputCount] : AssetOutput
+  Outputs[OutputCount] : AssetOutput
 }
 ```
+
+### 3.1. Encoding Details
+
+While the specification uses a logical TLV (Type-Length-Value) model, the canonical binary encoding employs specific optimizations for compactness.
+
+**Group Optional Fields: Presence Byte**
+
+Instead of using a type marker for each optional field within a `Group` (`AssetId`, `ControlAsset`, `Metadata`), the implementation uses a single **presence byte**. This byte is a bitfield that precedes the group's data, where each bit signals the presence of an optional field:
+
+-   `bit 0 (0x01)`: `AssetId` is present.
+-   `bit 1 (0x02)`: `ControlAsset` is present.
+-   `bit 2 (0x04)`: `Metadata` is present.
+
+The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
+
+**Variant Types: Type Markers**
+
+For data structures that represent one of several variants (a `oneof` structure), a **type marker byte** is used. This is consistent with the logical TLV model.
+
+-   **`AssetRef`**: `0x01` for `BY_ID`, `0x02` for `BY_GROUP`.
+-   **`AssetInput`**: `0x01` for `LOCAL`, `0x02` for `TELEPORT`.
+-   **`AssetOutput`**: `0x01` for `LOCAL`, `0x02` for `TELEPORT`.
+
+This hybrid approach balances compactness for the `Group` structure with the flexibility of type markers for variant data types.
 
 ### Types
 
@@ -138,12 +155,22 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
      - **Verifies the assets flow to an output with the committed `payment_script`**
 
 3. **Validation Rules**:
-   - Indexer tracks pending teleports by commitment hash
-   - When a teleport input is claimed, indexer verifies:
-     - Source transaction exists and has the teleport output
-     - Claiming transaction has an output with matching `payment_script`
-     - **Assets from teleport input MUST flow to a LOCAL output with the committed `payment_script`**
-   - Unclaimed teleports remain pending until claimed
+   - Indexer tracks pending teleports by commitment hash.
+   - **Lifecycle & Claiming Rules**:
+     - **Arkade-Native Teleport**: If a teleport is created by an *arkade* transaction, it is instantly claimable by **any** other transaction (arkade or on-chain). No confirmation delay is required.
+     - **On-Chain Teleport**: If a teleport is created by an *on-chain* transaction, it can be claimed by **any** other transaction (arkade or on-chain) after a minimum number of block confirmations (e.g., 6 blocks). This delay protects against reorg attacks.
+   - In summary, an indexer must enforce the following:
+     - **Arkade Source**: Instantly claimable by any destination.
+     - **On-Chain Source**: Claimable by any destination only after `N` confirmations.
+   - When a teleport input is claimed, the indexer also verifies:
+     - The source transaction exists and has the corresponding teleport output.
+     - The claiming transaction has an output with the matching `payment_script`.
+     - **Assets from the teleport input MUST flow to a LOCAL output with the committed `payment_script`**.
+   - Unclaimed teleports remain pending until claimed.
+
+   - **Competing Claims**: In scenarios where multiple transactions attempt to claim the same teleport, the first valid claim to be processed wins. This implies:
+     - An arkade transaction will always win against a competing on-chain transaction, as it is processed first.
+     - If two on-chain transactions compete, the one in the earlier block wins.
 
 ### Teleport State Tracking
 
@@ -152,6 +179,7 @@ The indexer maintains:
 PendingTeleport := {
   commitment: bytes32,
   source_txid: bytes32,
+  source_height: u64,      // Block height where the teleport was created. Optional for arkade-native teleports.
   assetid: AssetId,
   amount: u64
 }
@@ -610,22 +638,21 @@ In summary, while Proof of Genesis establishes historical origin, **Proof of Con
 
 ArkAsset supports a flexible, on-chain key-value model for metadata. Well-known keys (e.g., `name`, `ticker`, `decimals`) can be defined in a separate standards document, but any key-value pair is valid.
 
-There are two ways metadata is managed on-chain:
+Metadata is managed directly within the `Group` packet structure:
 
-**1. Immutable Genesis Metadata**
+**1. Genesis Metadata**
 
-When an asset is first created, the `Group` packet may contain an optional `Metadata` map. 
+When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Metadata` map in the `Group` defines its initial, base metadata. This is useful for defining core, permanent properties.
 
-- **Rule**: If this map is present in the genesis transaction, its key-value pairs are considered the base, immutable metadata for the asset. This is useful for defining core, permanent properties.
+**2. Metadata Updates**
 
-**2. Mutable Metadata Updates**
+To update the metadata for an existing asset, a `Group` for that asset must be included in a transaction. This group may or may not have inputs and outputs.
 
-Metadata can be updated after creation by including a `MetadataUpdate` entry in the main packet.
+- **Rule**: If the `Metadata` field is present in a group for an *existing* asset, it is treated as an update. The transaction is only valid if one of its inputs spends the UTXO that currently holds the **Control Asset** for the asset being updated.
+- **Behavior**: An indexer will replace the asset's existing metadata with the new key-value pairs. This allows any entity with spending rights of the control asset to change or add metadata fields over time.
+- **Idempotency**: If the provided metadata is identical to the existing metadata, the transaction is still valid (assuming authorization), but no state change occurs. This allows clients to submit metadata without needing to check if it has changed.
 
-- **Rule**: For each `MetadataUpdate` entry, its `AssetRef` is first resolved to a concrete `AssetId`. The transaction is only valid if one of its inputs spends the UTXO that currently holds the `ControlAsset` for that resolved `AssetId`.
-- **Behavior**: An indexer will find the latest valid metadata update transaction (by block height and transaction index) and replace its key-value pairs on top of the genesis metadata. This allows any entity with spending rights of the control asset to change or add metadata fields over time.
-
-> **Note:** To authorize a metadata update, the transaction must spend the UTXO containing the control asset. To avoid burning the control asset, the transaction packet must also include an asset group that transfers the control asset to a new output. If the control asset is not reissued, it is destroyed, and no further updates will be possible.
+> **Note:** To authorize a metadata update, the transaction must spend the UTXO containing the control asset. To avoid burning the control asset, the transaction packet must also include a group that transfers the control asset to a new output. If the control asset is not reissued, it is destroyed, and no further updates will be possible.
 
 ---
 
