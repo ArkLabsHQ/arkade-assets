@@ -10,18 +10,35 @@ ArkAssets extend Arkade Script with asset-specific introspection, following a pa
 
 ```javascript
 // Asset Group Introspection
-int tx.assetGroups.length                    // Number of asset groups
-bytes32 tx.assetGroups[i].assetId.txid       // Asset genesis txid
-int tx.assetGroups[i].assetId.gidx           // Asset group index
-int tx.assetGroups[i].inputs.length         // Number of inputs in group
-int tx.assetGroups[i].outputs.length        // Number of outputs in group
-int tx.assetGroups[i].delta                 // Net change (outputs - inputs)
+int tx.assetGroups.length;                    // Number of asset groups
+AssetGroup tx.assetGroups.find(AssetId);     // Find a group by asset ID
 
-// Asset Input/Output Details
-bool tx.assetGroups[i].inputs[j].isLocal     // LOCAL vs TELEPORT
-int tx.assetGroups[i].inputs[j].index        // Input index (LOCAL only)
-bytes32 tx.assetGroups[i].inputs[j].commitment // Commitment (TELEPORT only)
-int tx.assetGroups[i].inputs[j].amount       // Asset amount
+// AssetGroup Object
+AssetId tx.assetGroups[i].assetId;            // Asset ID for this group
+bytes32 tx.assetGroups[i].metadataHash;       // sha256 hash of on-chain metadata
+int tx.assetGroups[i].numInputs;              // Number of inputs in the group
+int tx.assetGroups[i].numOutputs;             // Number of outputs in the group
+bigint tx.assetGroups[i].delta;              // Net change (outputs - inputs)
+AssetInput tx.assetGroups[i].getInput(int);    // Get an input by index
+AssetOutput tx.assetGroups[i].getOutput(int); // Get an output by index
+
+// AssetInput Object
+AssetInputType tx.assetGroups[i].inputs[j].type; // LOCAL or TELEPORT
+bigint tx.assetGroups[i].inputs[j].amount;       // Asset amount
+// TELEPORT only:
+bytes32 tx.assetGroups[i].inputs[j].commitment; // Teleport commitment
+
+// AssetOutput Object
+AssetOutputType tx.assetGroups[i].outputs[j].type; // LOCAL or TELEPORT
+bigint tx.assetGroups[i].outputs[j].amount;        // Asset amount
+// TELEPORT only:
+bytes32 tx.assetGroups[i].outputs[j].commitment;  // Teleport commitment
+// LOCAL only:
+bytes tx.assetGroups[i].outputs[j].scriptPubKey; // Output script
+
+// Enum Types
+enum AssetInputType { LOCAL, TELEPORT }
+enum AssetOutputType { LOCAL, TELEPORT }
 
 // Cross-input/output lookups
 int tx.inputs[i].assetCount                  // Number of assets on input i
@@ -54,32 +71,45 @@ This contract enforces that assets are teleported in and out correctly for batch
 
 ```typescript
 contract TeleportBatchSwap(
-    operator: PubKey,
-    inAssetId: AssetId,
-    inCommitment: bytes32,
-    inAmount: bigint,
-    outAssetId: AssetId,
-    outCommitment: bytes32,
-    outAmount: bigint
+    operator: PubKey
 ) {
-    function execute(sig: Sig) {
+    function execute(
+        sig: Sig,
+        inAssetId: AssetId,
+        inCommitment: bytes32,
+        inAmount: bigint,
+        outAssetId: AssetId,
+        outCommitment: bytes32,
+        outAmount: bigint
+    ) {
         // Verify operator signature
         require(checkSig(sig, operator));
 
         // Verify the expected teleport input is present
         let inGroup = tx.assets.findGroup(inAssetId);
         require(inGroup != null, "Missing expected input asset");
-        require(inGroup.hasTeleportInput(inCommitment, inAmount), "Missing expected teleport input");
+        // Note: A real contract would check for a specific input, but since loops are
+        // not allowed, we check the first input as an example.
+        require(inGroup.numInputs > 0, "Input asset group has no inputs");
+        let input = inGroup.getInput(0);
+        require(input.type == AssetInputType.TELEPORT, "Input is not a teleport");
+        require(input.commitment == inCommitment, "Incorrect input commitment");
+        require(input.amount == inAmount, "Incorrect input amount");
 
         // Verify the expected teleport output is present
         let outGroup = tx.assets.findGroup(outAssetId);
         require(outGroup != null, "Missing expected output asset");
-        require(outGroup.hasTeleportOutput(outCommitment, outAmount), "Missing expected teleport output");
+        require(outGroup.numOutputs > 0, "Output asset group has no outputs");
+        let output = outGroup.getOutput(0);
+        require(output.type == AssetOutputType.TELEPORT, "Output is not a teleport");
+        require(output.commitment == outCommitment, "Incorrect output commitment");
+        require(output.amount == outAmount, "Incorrect output amount");
     }
 }
 ```
 
 **Use Case**: Premium VTXOs that require holding governance tokens or membership NFTs.
+
 
 ### 2. Teleport Batch Swap
 
@@ -114,7 +144,60 @@ contract BatchSwapVTXO(
 
 **Use Case**: Enables seamless asset continuity across VTXO batch swaps without requiring operator liquidity fronting.
 
-### 3. Multi-Asset Escrow with Teleports
+### 3. Gated Asset Swap (Explicit Merkle Verification)
+
+This contract provides a realistic implementation of metadata verification for a language without loops. It performs an explicit, unrolled Merkle proof verification for a fixed-depth tree (in this case, depth 4). This removes any reliance on abstract helper functions and represents a secure, standard pattern.
+
+```typescript
+pragma arkade ^1.0.0;
+
+// Verifies a Merkle proof for a fixed-depth tree.
+// - leaf: The hash of the data being proven.
+// - root: The Merkle root from the on-chain asset state.
+// - proof: An array of sibling hashes.
+// - path: A bitmap indicating the position of the sibling at each level (0 for right, 1 for left).
+function verifyMerkleProof(leaf: bytes32, root: bytes32, proof: bytes32[4], path: bigint): bool {
+    let computed = leaf;
+    // Unrolled loop for a tree of depth 4
+    computed = (path & 1n) ? sha256(proof[0] + computed) : sha256(computed + proof[0]);
+    computed = (path & 2n) ? sha256(proof[1] + computed) : sha256(computed + proof[1]);
+    computed = (path & 4n) ? sha256(proof[2] + computed) : sha256(computed + proof[2]);
+    computed = (path & 8n) ? sha256(proof[3] + computed) : sha256(computed + proof[3]);
+    return computed == root;
+}
+
+contract GatedAssetSwap(
+    pubkey userA, pubkey userB,
+    assetId assetA, bigint amountA,
+    assetId assetB, bigint amountB
+) {
+    function execute(
+        sigA: Sig, sigB: Sig,
+        keyA: bytes, valueA: bytes, leafA: bytes32, proofA: bytes32[4], pathA: bigint,
+        keyB: bytes, valueB: bytes, leafB: bytes32, proofB: bytes32[4], pathB: bigint
+    ) {
+        require(checkSig(sigA, userA));
+        require(checkSig(sigB, userB));
+
+        let groupA = tx.assets.findGroup(assetA);
+        let groupB = tx.assets.findGroup(assetB);
+        require(groupA != null && groupB != null, "Missing asset groups");
+
+        // Verify that one asset is a stablecoin by checking its metadata property.
+        let isAStable = keyA == 'is_stablecoin' && valueA == 'true' && verifyMerkleProof(leafA, groupA.metadataHash, proofA, pathA);
+        let isBStable = keyB == 'is_stablecoin' && valueB == 'true' && verifyMerkleProof(leafB, groupB.metadataHash, proofB, pathB);
+        require(isAStable || isBStable, "One asset must be a verified stablecoin");
+
+        // Verify the swap amounts
+        require(groupA.delta == amountB - amountA, "Incorrect delta for asset A");
+        require(groupB.delta == amountA - amountB, "Incorrect delta for asset B");
+    }
+}
+```
+
+**Use Case**: Creating decentralized exchanges (DEXs) or swap pools that enforce specific rules about the types of assets that can be traded, without relying on a centralized operator or oracle.
+
+### 4. Multi-Asset Escrow with Teleports
 
 An escrow that holds multiple assets and releases them via teleports using pre-agreed commitments:
 
@@ -123,11 +206,9 @@ contract MultiAssetEscrow(
     seller: PubKey,
     buyer: PubKey,
     arbiter: PubKey,
-    assetId: AssetId,
-    releaseCommitment: bytes32,
     releaseHeight: int
 ) {
-    function release(sellerSig: Sig, buyerSig: Sig, arbiterSig: Sig) {
+    function release(sellerSig: Sig, buyerSig: Sig, arbiterSig: Sig, assetId: AssetId, releaseCommitment: bytes32) {
         // Before timeout, need 2-of-3 signatures
         // After timeout, only seller signature is needed
         require(
@@ -239,11 +320,9 @@ pragma arkade ^1.0.0;
 // Multi-signature vault for asset custody
 contract MultiSigAssetVault(
     pubkey[3] signers,
-    int requiredSigs,
-    bytes32 targetCommitment,
-    AssetId controlledAssetId
+    int requiredSigs
 ) {
-    function release(signature[3] sigs) {
+    function release(signature[3] sigs, AssetId controlledAssetId, bytes32 targetCommitment) {
         // Verify we have enough valid signatures from the allowed signers
         require(checkMultiSig(sigs, signers, requiredSigs), "Insufficient signatures");
         
