@@ -337,18 +337,36 @@ export class Indexer {
     }
 
     const deltaByAsset = new Map(groupSums.map(x => [x.assetKey, x.delta]));
-    const requireControlRetained = (controlledAssetKey: string) => {
+    // Map each group's control reference (if any) to its resolved asset key for enforcement
+    const controlKeyByGroup: (string | null)[] = eff.map((g) => {
+      const resolved = resolveAssetRef(g.controlRef);
+      return resolved ? Indexer.assetKey(resolved.txidHex, resolved.gidx) : null;
+    });
+    const requireControlPresent = (controlledAssetKey: string) => {
       const def = state.assets[controlledAssetKey];
       if (!def || !def.control) throw new Error(`Asset ${controlledAssetKey} has no control definition`);
       const delta = deltaByAsset.get(def.control);
       if (delta === undefined) throw new Error(`Control asset ${def.control} not present in tx`);
-      if (delta !== 0n) throw new Error(`Control asset ${def.control} must be retained (Δ=0), got Δ=${delta}`);
     };
 
     groups.forEach((_, gidx) => {
       const { assetKey, delta } = groupSums[gidx];
       const isFresh = !state.assets[assetKey] && eff[gidx].assetId.txidHex === tx.txid;
-      if (delta > 0n && !isFresh) requireControlRetained(assetKey);
+      if (delta > 0n) {
+        if (isFresh) {
+          // Fresh issuance: if a control pointer is specified, require its presence (Δ arbitrary)
+          const ctrlKey = controlKeyByGroup[gidx];
+          if (ctrlKey) {
+            const ctrlDelta = deltaByAsset.get(ctrlKey);
+            if (ctrlDelta === undefined) {
+              throw new Error(`Control asset ${ctrlKey} not present in tx (required for fresh issuance of ${assetKey})`);
+            }
+          }
+        } else {
+          // Reissuance of existing asset: require its configured control asset to be present (Δ arbitrary)
+          requireControlPresent(assetKey);
+        }
+      }
     });
 
     for (const vin of tx.vin || []) {

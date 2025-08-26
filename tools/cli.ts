@@ -4,7 +4,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildTxFromPayload } from './make-opreturn';
-import { exampleA, exampleB } from './example-txs';
+import { exampleA, exampleB, exampleC } from './example-txs';
 import { Indexer } from './indexer';
 import { NodeFileStorage } from './node-storage';
 
@@ -28,6 +28,9 @@ function handleMakeTx(args: { [key: string]: any }): void {
         break;
       case 'B':
         tx = exampleB(txidHex);
+        break;
+      case 'C':
+        tx = exampleC(txidHex);
         break;
       default:
         console.error(`Unknown example: ${args.example}`);

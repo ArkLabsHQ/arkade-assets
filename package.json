@@ -5,8 +5,8 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node dist/tools/arkass-codec.test.js",
-    "cli": "npm run build && node dist/tools/cli.js",
+    "test": "npm run build && node dist/arkass-codec.test.js",
+    "cli": "npm run build && node dist/cli.js",
     "indexer:init": "npm run cli -- indexer init",
     "indexer:apply": "npm run cli -- indexer apply",
     "make-tx": "npm run cli -- make-tx",
@@ -20,5 +20,10 @@
   "devDependencies": {
     "@types/node": "^24.3.0",
     "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.0.0",
+    "@noble/secp256k1": "^3.0.0",
+    "sodium-plus": "^0.9.0"
   }
 }

@@ -504,7 +504,12 @@ export function decodeGroup(buf: Uint8Array, off: number): { group: Group; next:
   const outputs: AssetOutput[] = [];
   for (let k = 0; k < vout.value; k++) { const r = decodeAssetOutput(buf, cursor); outputs.push(r.output); cursor = r.next; }
 
-  return { group: { assetId, control, metadata, inputs, outputs }, next: cursor };
+  // Construct group without undefined optional fields so deepStrictEqual matches
+  const group: Group = { inputs, outputs };
+  if (assetId) group.assetId = assetId;
+  if (control) group.control = control;
+  if (metadata) group.metadata = metadata;
+  return { group, next: cursor };
 }
 
 export function decodePacket(buf: Uint8Array, off = 0): { groups: Group[]; next: number } {

@@ -18,9 +18,9 @@ If an Asset group omits its Asset Id, it mints a **fresh asset** whose Asset Id 
 
 If Asset Id is provided, the group operates on that existing asset.
 
-When a fresh asset is being created, it may refer to another asset (fresh or existing) as its control asset. 
+When a fresh asset is being created, it may refer to another asset as its control asset. Issuance is valid if that control asset is present in the same transaction. Retention (Δ=0) is not required. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
 
-Control assets allow additional, future reissuance of a token, and are themselves assets. When a positive delta is detected in an asset group (the sum of the asset group's outputs is larger than the sum of the asset group's inputs), the control asset is required to be part of the transaction. If the asset did not have a control asset specified, it cannot reissue. Fresh assets that specifies an existing asset as its control asset do not require that control asset to be present for the initial issuance.
+Control assets allow additional, future reissuance of a token, and are themselves assets. When a positive delta (Σout > Σin) is detected in an asset group that specifies a control asset, that control asset MUST appear in the same transaction. Retention (Δ=0) is not required. This requirement applies to both fresh issuance and reissuance. If an asset did not specify a control asset at genesis, it cannot be reissued.
 
 ArkAssetV1 supports projecting multiple assets unto a UTXO.\
 BTC amounts are orthogonal and not included in asset accounting.
@@ -261,16 +261,17 @@ All Asset Ids are handled as **two stack items**: `(txid32, gidx_u16)`.
 
 ## 6. Examples of transactions
 
-### A) Genesis issuance: mint control C and asset A
+### A) Fresh issuance with control C present (C pre‑exists)
 
 ```
-Group[0] (C): AssetId absent → (txid,0)
+Group[0] (C): AssetId=(txidC,gidxC)
               CTRL absent
-              O: (o0,1)
+              I: (i0,1)
+              O: (o0,1)               # present (Δ shown as 0 here, but not required)
 
-Group[1] (A): AssetId absent → (txid,1)
-              CTRL=BY_GROUP{0} → (txid,0)
-              O: (o1,500), (o2,500)
+Group[1] (A): AssetId absent → (this_txid,1)
+              CTRL=BY_ID{ assetid:{txidC,gidxC} }
+              O: (o1,500), (o2,500)   # Δ>0 → fresh issuance
 ```
 
 Diagram:
@@ -278,20 +279,24 @@ Diagram:
 ```mermaid
 flowchart LR
   TX[(this_txid)]
+  i0["input index 0<br/>• C: 1"] --> TX
   TX --> o0["output index 0<br/>• C: 1"]
   TX --> o1["output index 1<br/>• A: 500"]
   TX --> o2["output index 2<br/>• A: 500"]
 
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
   classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
   classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0 in;
   class TX tx;
   class o0,o1,o2 out;
 ```
 
 **Checks:**
 
-- Group 1: Δ>0 and fresh.
-- Group 1: CTRL points to sibling 0; sibling minted Σout>0.
+- Group 1 (A): Δ>0 and fresh.
+- Group 0 (C): C is present (Δ arbitrary).
+- Group 1: CTRL=BY_ID points to C; issuance valid since control is present in the same tx.
 
 ---
 
@@ -351,11 +356,11 @@ flowchart LR
 
 ---
 
-### D) Reissuance with retained control
+### D) Reissuance with control present
 
 ```
   Group (A): Δ>0, CTRL=(txidC,gidxC)
-  Group (C): Δ=0, in/out match → control retained
+  Group (C): present (Δ arbitrary)
 ```
 
 Diagram:
@@ -376,7 +381,7 @@ flowchart LR
   class TX tx;
 ```
 
-Policy: issuance valid since control is present and not consumed.
+Policy: issuance valid since control is present.
 
 ---
 
@@ -477,24 +482,23 @@ Graph: S → C → A
 
 Rules:
 
-- To reissue A (Δ>0 in group A), C must be present in the same transaction and retained (Δ=0).
-- To reissue C (Δ>0 in group C), S must be present in the same transaction and retained (Δ=0).
-- “Present and retained” means the control asset appears as a group with matching inputs and outputs (no net spend), as shown in section D.
+- To reissue A (Δ>0 in group A), C must be present in the same transaction.
+- To reissue C (Δ>0 in group C), S must be present in the same transaction.
 
 Example packet layout:
 
 ```
 Group[0] (S): AssetId=(txidS,gidxS)                          # top-level control
-              I/O balance: Δ=0                               # present and retained
+              I/O balance: Δ arbitrary (example shows Δ=0)   # present
 
 Group[1] (C): AssetId=(txidC,gidxC), CTRL=BY_ID{ assetid:{txidS,gidxS} }
-              I/O balance: Δ=0 or Δ>0                        # Δ>0 only if reissuing C; then S must be retained (Δ=0)
+              I/O balance: Δ arbitrary                       # if reissuing C (Δ>0), S must be present
 
 Group[2] (A): AssetId=(txidA,gidxA), CTRL=BY_ID{ assetid:{txidC,gidxC} }
-              I/O balance: Δ>0                               # reissuing A; requires C retained (Δ=0)
+              I/O balance: Δ>0                               # reissuing A; requires C present
 ```
 
-If only A is reissued, C must be retained (Δ=0) but S is not required unless C itself is being reissued.
+If only A is reissued, C must be present but S is not required unless C itself is being reissued.
 
 ---
 

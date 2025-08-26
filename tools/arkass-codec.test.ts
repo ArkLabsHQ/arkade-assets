@@ -44,7 +44,13 @@ function testCodec() {
   const script = buildOpReturnScript(originalPacket);
   const decodedPacket = parseOpReturnScript(script);
 
-  assert.deepStrictEqual(decodedPacket, expectedPacket, 'Decoded packet does not match original');
+  try {
+    assert.deepStrictEqual(decodedPacket, expectedPacket, 'Decoded packet does not match original');
+  } catch (err) {
+    console.error('Decoded packet:', JSON.stringify(decodedPacket, null, 2));
+    console.error('Expected packet:', JSON.stringify(expectedPacket, null, 2));
+    throw err;
+  }
 
   console.log('Codec tests passed!');
 }

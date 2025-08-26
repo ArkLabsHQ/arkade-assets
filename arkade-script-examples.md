@@ -9,18 +9,23 @@ This document demonstrates how to integrate ArkAssets with Arkade Script, provid
 ArkAssets extend Arkade Script with asset-specific introspection, following a pattern similar to other smart contract languages:
 
 ```javascript
+// Transaction basics
+bytes32 tx.txid;                               // maps to OP_TXHASH
+
 // Asset Group Introspection
-int tx.assetGroups.length;                    // Number of asset groups
-AssetGroup tx.assetGroups.find(AssetId);     // Find a group by asset ID
+int tx.assetGroups.length;                    // Number of asset groups -> maps to OP_INSPECTNUMASSETGROUPS
+AssetGroup tx.assetGroups.find(AssetId);     // Find a group by asset ID -> maps to OP_FINDASSETGROUPBYASSETID
 
 // AssetGroup Object
-AssetId tx.assetGroups[i].assetId;            // Asset ID for this group
-bytes32 tx.assetGroups[i].metadataHash;       // sha256 hash of on-chain metadata
-int tx.assetGroups[i].numInputs;              // Number of inputs in the group
-int tx.assetGroups[i].numOutputs;             // Number of outputs in the group
-bigint tx.assetGroups[i].delta;              // Net change (outputs - inputs)
-AssetInput tx.assetGroups[i].getInput(int);    // Get an input by index
-AssetOutput tx.assetGroups[i].getOutput(int); // Get an output by index
+AssetId tx.assetGroups[i].assetId;            // Asset ID for this group -> maps to OP_INSPECTASSETGROUPASSETID
+bytes32 tx.assetGroups[i].metadataHash;       // sha256 hash of on-chain metadata -> maps to OP_INSPECTASSETGROUPMETADATAHASH
+int tx.assetGroups[i].numInputs;              // Number of inputs in the group -> maps to OP_INSPECTASSETGROUPNUMIN
+int tx.assetGroups[i].numOutputs;             // Number of outputs in the group -> maps to OP_INSPECTASSETGROUPNUMOUT
+bigint tx.assetGroups[i].delta;              // Net change (outputs - inputs) -> maps to OP_INSPECTASSETGROUPDELTA
+bigint tx.assetGroups[i].sumInputs;           // Sum of input amounts -> maps to OP_INSPECTASSETGROUPSUMIN
+bigint tx.assetGroups[i].sumOutputs;          // Sum of output amounts -> maps to OP_INSPECTASSETGROUPSUMOUT
+AssetInput tx.assetGroups[i].getInput(int);    // Get an input by index -> maps to OP_INSPECTASSETGROUPIN
+AssetOutput tx.assetGroups[i].getOutput(int); // Get an output by index -> maps to OP_INSPECTASSETGROUPOUT
 
 // AssetInput Object
 AssetInputType tx.assetGroups[i].inputs[j].type; // LOCAL or TELEPORT
@@ -34,16 +39,28 @@ bigint tx.assetGroups[i].outputs[j].amount;        // Asset amount
 // TELEPORT only:
 bytes32 tx.assetGroups[i].outputs[j].commitment;  // Teleport commitment
 // LOCAL only:
-bytes tx.assetGroups[i].outputs[j].scriptPubKey; // Output script
+bytes tx.assetGroups[i].outputs[j].scriptPubKey; // Output script (via out_index from OP_INSPECTASSETGROUPOUT + OP_INSPECTOUTPUTSCRIPTPUBKEY)
 
 // Enum Types
 enum AssetInputType { LOCAL, TELEPORT }
 enum AssetOutputType { LOCAL, TELEPORT }
 
-// Cross-input/output lookups
-int tx.inputs[i].assetCount                  // Number of assets on input i
-bytes32 tx.inputs[i].assets[j].assetId.txid  // j-th asset on input i
-int tx.inputs[i].assets[j].amount            // Amount of j-th asset
+// Cross-input lookups (packet-declared)
+int    tx.inputs[i].assets.length;               // maps to OP_INSPECTINASSETCOUNT
+AssetId tx.inputs[i].assets[j].assetId;          // maps to OP_INSPECTINASSETAT (asset id part)
+bigint  tx.inputs[i].assets[j].amount;           // maps to OP_INSPECTINASSETAT (amount part)
+bigint  tx.inputs[i].assets.lookup(AssetId);     // maps to OP_INSPECTINASSETLOOKUP (amount | 0)
+
+// AssetGroup lineage pointer (control asset reference)
+AssetId tx.assetGroups[i].control;                 // maps to OP_INSPECTASSETGROUPCTRL
+
+// Output introspection (multi-asset per UTXO)
+int   tx.outputs.length;                           // number of transaction outputs
+bytes tx.outputs[i].scriptPubKey;                  // maps to OP_INSPECTOUTPUTSCRIPTPUBKEY
+int   tx.outputs[i].assets.length;                 // maps to OP_INSPECTOUTASSETCOUNT
+AssetId tx.outputs[i].assets[j].assetId;          // maps to OP_INSPECTOUTASSETAT (asset id part)
+bigint  tx.outputs[i].assets[j].amount;           // maps to OP_INSPECTOUTASSETAT (amount part)
+bigint  tx.outputs[i].assets.lookup(AssetId);     // maps to OP_INSPECTOUTASSETLOOKUP (amount | 0)
 ```
 
 ### Asset Types and Structures
@@ -60,6 +77,18 @@ struct AssetRef {
     bool byId;              // true for BY_ID, false for BY_GROUP
     AssetId assetId;        // Used when byId = true
     int groupIndex;         // Used when byId = false
+}
+
+// Teleport-specific introspection records
+struct TeleportOut {
+    bytes32 txid;
+    int vout;
+    bigint amount;
+}
+struct TeleportIn {
+    bytes32 txid;
+    int vout;
+    bigint amount;
 }
 ```
 
@@ -86,7 +115,7 @@ contract TeleportBatchSwap(
         require(checkSig(sig, operator));
 
         // Verify the expected teleport input is present
-        let inGroup = tx.assets.findGroup(inAssetId);
+        let inGroup = tx.assetGroups.find(inAssetId);
         require(inGroup != null, "Missing expected input asset");
         // Note: A real contract would check for a specific input, but since loops are
         // not allowed, we check the first input as an example.
@@ -97,7 +126,7 @@ contract TeleportBatchSwap(
         require(input.amount == inAmount, "Incorrect input amount");
 
         // Verify the expected teleport output is present
-        let outGroup = tx.assets.findGroup(outAssetId);
+        let outGroup = tx.assetGroups.find(outAssetId);
         require(outGroup != null, "Missing expected output asset");
         require(outGroup.numOutputs > 0, "Output asset group has no outputs");
         let output = outGroup.getOutput(0);
@@ -131,7 +160,10 @@ contract BatchSwapVTXO(
         // Note: This check is illustrative. A real contract would need to know which asset
         // groups to check, for example by passing the AssetIds in the constructor.
         require(tx.assetGroups.length > 0, "Transaction must have assets");
-        require(tx.assetGroups[0].hasTeleportOutputCommitment(targetCommitment), "First asset group must teleport to target");
+        require(tx.assetGroups[0].numOutputs > 0, "First asset group has no outputs");
+        let firstOut = tx.assetGroups[0].getOutput(0);
+        require(firstOut.type == AssetOutputType.TELEPORT, "First output is not a teleport");
+        require(firstOut.commitment == targetCommitment, "First asset group must teleport to target");
     }
     
     function operatorSpend(signature operatorSig) {
@@ -179,8 +211,8 @@ contract GatedAssetSwap(
         require(checkSig(sigA, userA));
         require(checkSig(sigB, userB));
 
-        let groupA = tx.assets.findGroup(assetA);
-        let groupB = tx.assets.findGroup(assetB);
+        let groupA = tx.assetGroups.find(assetA);
+        let groupB = tx.assetGroups.find(assetB);
         require(groupA != null && groupB != null, "Missing asset groups");
 
         // Verify that one asset is a stablecoin by checking its metadata property.
@@ -217,9 +249,12 @@ contract MultiAssetEscrow(
         );
         
         // Verify the asset is being teleported to the correct commitment
-        let group = tx.assets.findGroup(assetId);
+        let group = tx.assetGroups.find(assetId);
         require(group != null, "Missing asset");
-        require(group.hasTeleportOutputCommitment(releaseCommitment), "Missing required teleport output");
+        require(group.numOutputs > 0, "Asset group has no outputs");
+        let out0 = group.getOutput(0);
+        require(out0.type == AssetOutputType.TELEPORT, "Output is not a teleport");
+        require(out0.commitment == releaseCommitment, "Missing required teleport output");
     }
 }
 ```
@@ -243,14 +278,12 @@ contract AssetController(
         require(checkSig(issuerSig, issuerPk));
         
         // Find control asset group
-        let controlGroup = tx.assets.findGroup(controlAssetId);
+        let controlGroup = tx.assetGroups.find(controlAssetId);
         require(controlGroup != null, "Control asset not found");
-        
-        // Control asset must be retained (delta = 0)
-        require(controlGroup.delta == 0, "Control asset must be retained");
+        // Control asset must be present; retention (Δ=0) is not required
         
         // Find controlled asset group and verify reissuance amount
-        let reissuedGroup = tx.assets.findGroup(reissuedAssetId);
+        let reissuedGroup = tx.assetGroups.find(reissuedAssetId);
         require(reissuedGroup != null, "Reissued asset not found");
         require(reissuedGroup.delta == newAmount, "Wrong reissuance amount");
     }
@@ -294,8 +327,8 @@ contract AssetSwap(
         require(tx.time <= timestamp + 300); // 5 minute freshness
         
         // Find asset groups
-        let baseGroup = tx.assets.findGroup({txid: baseAssetTxid, gidx: baseAssetGidx});
-        let quoteGroup = tx.assets.findGroup({txid: quoteAssetTxid, gidx: quoteAssetGidx});
+        let baseGroup = tx.assetGroups.find({txid: baseAssetTxid, gidx: baseAssetGidx});
+        let quoteGroup = tx.assetGroups.find({txid: quoteAssetTxid, gidx: quoteAssetGidx});
         require(baseGroup != null && quoteGroup != null, "Assets not found");
         
         // Calculate expected exchange rate with slippage tolerance
@@ -327,9 +360,12 @@ contract MultiSigAssetVault(
         require(checkMultiSig(sigs, signers, requiredSigs), "Insufficient signatures");
         
         // The controlled asset must teleport with the specified commitment
-        let group = tx.assets.findGroup(controlledAssetId);
+        let group = tx.assetGroups.find(controlledAssetId);
         require(group != null, "Controlled asset not found");
-        require(group.hasTeleportOutputCommitment(targetCommitment), "Wrong target commitment");
+        require(group.numOutputs > 0, "Controlled asset group has no outputs");
+        let out0 = group.getOutput(0);
+        require(out0.type == AssetOutputType.TELEPORT, "First output is not a teleport");
+        require(out0.commitment == targetCommitment, "Wrong target commitment");
     }
 }
 ```
@@ -401,8 +437,8 @@ contract SyntheticAssetCovenant(
         require(tx.age >= minLockupDuration);
 
         // Verify asset movements using deltas
-        let synthGroup = tx.assets.findGroup(synthAsset);
-        let collateralGroup = tx.assets.findGroup(collateralAsset);
+        let synthGroup = tx.assetGroups.find(synthAsset);
+        let collateralGroup = tx.assetGroups.find(collateralAsset);
         require(synthGroup != null && collateralGroup != null, "Asset groups not found");
 
         // 1. The exact amount of synth must be burned (delta = -synthAmount)
@@ -432,14 +468,14 @@ contract SyntheticAssetCovenant(
         require(timestamp.toUint32() >= this.creationTime(), "Oracle signature too old");
 
         // Find the synthetic asset group
-        let synthGroup = tx.assets.findGroup(synthAsset);
+        let synthGroup = tx.assetGroups.find(synthAsset);
         require(synthGroup != null, "Synthetic asset not found");
 
         // Verify the exact amount of synth is burned (delta = -synthAmount)
         require(synthGroup.delta == -synthAmount, "Incorrect synth amount burned");
 
         // The collateral is claimed by the issuer, so its delta is -collateralAmount.
-        let collateralGroup = tx.assets.findGroup(collateralAsset);
+        let collateralGroup = tx.assetGroups.find(collateralAsset);
         require(collateralGroup != null, "Collateral asset not found");
         require(collateralGroup.delta == -collateralAmount, "Incorrect collateral amount liquidated");
     }
@@ -450,14 +486,14 @@ contract SyntheticAssetCovenant(
         require(checkSig(issuerSig, issuerPk));
 
         // Find the synthetic asset group
-        let synthGroup = tx.assets.findGroup(synthAsset);
+        let synthGroup = tx.assetGroups.find(synthAsset);
         require(synthGroup != null, "Synthetic asset not found");
 
         // Verify the exact amount of synth is burned (delta = -synthAmount).
         // The collateral is spent into a new covenant, so its delta is 0.
         require(synthGroup.delta == -synthAmount, "Incorrect synth amount burned");
 
-        let collateralGroup = tx.assets.findGroup(collateralAsset);
+        let collateralGroup = tx.assetGroups.find(collateralAsset);
         require(collateralGroup != null, "Collateral asset not found");
         require(collateralGroup.delta == 0, "Collateral must be passed to a new covenant");
     }
