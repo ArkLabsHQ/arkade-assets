@@ -206,24 +206,18 @@ All Asset Ids are handled as **two stack items**: `(txid32, gidx_u16)`.
   *Resolved AssetId of group **``**. Fresh groups use **``**.*
 - `OP_INSPECTASSETGROUPCTRL k` → *[out]* `ctrl_txid32  ctrl_gidx_u16 | OP_0`\
   *Control AssetId if present, else OP\_0.*
-- `OP_INSPECTASSETGROUPMETADATAHASH k` → *[out]* `metadata_hash_bytes32`\
-  *Pushes the metadata hash (Merkle root) of group **k**.*
 - `OP_FINDASSETGROUPBYASSETID assetid_txid32 assetid_gidx_u16` → *[out]* `k | OP_0`\
   *Find group index for a given AssetId, or OP\_0 if absent.*
 
 ### Per-group I/O
-
-- `OP_INSPECTASSETGROUPNUMIN  k` → *[out]* `I_k`\
-  *Number of declared inputs for group k.*
-- `OP_INSPECTASSETGROUPIN     k j` → *[out]* `type_u8  data...  amount_u64`\
-  *Retrieve j-th input of group k. For LOCAL: `0x01 in_index_u16 amount_u64`. For TELEPORT: `0x02 commitment_32 amount_u64`.*
-- `OP_INSPECTASSETGROUPNUMOUT k` → *[out]* `O_k`\
-  *Number of declared outputs for group k.*
-- `OP_INSPECTASSETGROUPOUT    k j` → *[out]* `type_u8  data...  amount_u64`\
-  *Retrieve j-th output of group k. For LOCAL: `0x01 out_index_u16 amount_u64`. For TELEPORT: `0x02 commitment_32 amount_u64`.*
-- `OP_INSPECTASSETGROUPSUMIN  k` → *[out]* `Σ_in_u64`\
-  *Sum of all input amounts for group k.*
-- `OP_INSPECTASSETGROUPSUMOUT k` → *[out]* `Σ_out_u64`\
+- `OP_INSPECTASSETGROUPMETADATAHASH k source_u8` → *[out]* `metadata_hash_bytes32`\
+  *Pushes the metadata hash (Merkle root) of group **k**. `source_u8` determines the source: `0` for the existing metadata (from inputs), `1` for the new metadata (from outputs), and `2` to push both (existing then new).*
+- `OP_INSPECTASSETGROUPNUM k source_u8` → *[out]* `count_u16` or `count_in_u16 count_out_u16`\
+  *Pushes the number of inputs/outputs for group **k**. `source_u8`: `0` for inputs, `1` for outputs, `2` for both (in, then out).*
+- `OP_INSPECTASSETGROUP k j source_u8` → *[out]* `type_u8  data...  amount_u64`\
+  *Retrieve the j-th input/output of group **k**. `source_u8`: `0` for input, `1` for output.*
+- `OP_INSPECTASSETGROUPSUM k source_u8` → *[out]* `sum_u64` or `sum_in_u64 sum_out_u64`\
+  *Pushes the sum of input/output amounts for group **k**. `source_u8`: `0` for inputs, `1` for outputs, `2` for both (in, then out).*
   *Sum of all output amounts for group k.*
 - `OP_INSPECTASSETGROUPDELTA  k` → *[out]* `delta_i64` (Σout − Σin)\
   *Net change for group k. >0 issuance, 0 transfer, <0 burn.*
@@ -614,7 +608,7 @@ graph LR
 
 ---
 
-### I) Proof of Authenticity
+### Proof of Authenticity
 
 Proving that an asset was genuinely issued by a specific entity (e.g., Tether issuing a stablecoin) can be accomplished by signing a message with the private key corresponding to a relevant UTXO. This is typically done using a standard like BIP322 (Signatures for P2TR). There are two primary methods:
 
@@ -640,9 +634,9 @@ In summary, while Proof of Genesis establishes historical origin, **Proof of Con
 
 ---
 
-### I) Asset Metadata (On-Chain)
+### Asset Metadata
 
-ArkAsset supports a flexible, on-chain key-value model for metadata. Well-known keys (e.g., `name`, `ticker`, `decimals`) can be defined in a separate standards document, but any key-value pair is valid.
+ArkAsset supports a flexible, on-chain key-value model for metadata in the asset group. Well-known keys (e.g., `name`, `ticker`, `decimals`) can be defined in a separate standards document, but any key-value pair is valid.
 
 Metadata is managed directly within the `Group` packet structure:
 

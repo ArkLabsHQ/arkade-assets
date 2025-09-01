@@ -18,14 +18,13 @@ AssetGroup tx.assetGroups.find(AssetId);     // Find a group by asset ID -> maps
 
 // AssetGroup Object
 AssetId tx.assetGroups[i].assetId;            // Asset ID for this group -> maps to OP_INSPECTASSETGROUPASSETID
-bytes32 tx.assetGroups[i].metadataHash;       // sha256 hash of on-chain metadata -> maps to OP_INSPECTASSETGROUPMETADATAHASH
-int tx.assetGroups[i].numInputs;              // Number of inputs in the group -> maps to OP_INSPECTASSETGROUPNUMIN
-int tx.assetGroups[i].numOutputs;             // Number of outputs in the group -> maps to OP_INSPECTASSETGROUPNUMOUT
-bigint tx.assetGroups[i].delta;              // Net change (outputs - inputs) -> maps to OP_INSPECTASSETGROUPDELTA
-bigint tx.assetGroups[i].sumInputs;           // Sum of input amounts -> maps to OP_INSPECTASSETGROUPSUMIN
-bigint tx.assetGroups[i].sumOutputs;          // Sum of output amounts -> maps to OP_INSPECTASSETGROUPSUMOUT
-AssetInput tx.assetGroups[i].getInput(int);    // Get an input by index -> maps to OP_INSPECTASSETGROUPIN
-AssetOutput tx.assetGroups[i].getOutput(int); // Get an output by index -> maps to OP_INSPECTASSETGROUPOUT
+int tx.assetGroups[i].numInputs;              // -> OP_INSPECTASSETGROUPNUM with source 0
+int tx.assetGroups[i].numOutputs;             // -> OP_INSPECTASSETGROUPNUM with source 1
+bigint tx.assetGroups[i].delta;              // -> OP_INSPECTASSETGROUPDELTA
+bigint tx.assetGroups[i].sumInputs;           // -> OP_INSPECTASSETGROUPSUM with source 0
+bigint tx.assetGroups[i].sumOutputs;          // -> OP_INSPECTASSETGROUPSUM with source 1
+AssetInput tx.assetGroups[i].inputs[j];    // -> OP_INSPECTASSETGROUP k j 0
+AssetOutput tx.assetGroups[i].outputs[j]; // -> OP_INSPECTASSETGROUP k j 1
 
 // AssetInput Object
 AssetInputType tx.assetGroups[i].inputs[j].type; // LOCAL or TELEPORT
@@ -94,7 +93,100 @@ struct TeleportIn {
 
 ## Example Contracts
 
-### 1. Teleport Batch Swap Contract
+### 1. Max Issuance Control with Recursive Covenant
+
+This contract enforces a maximum supply of tokens using a control token that must be present in every minting transaction. The control token is locked in a recursive covenant that tracks the total supply.
+
+```typescript
+contract MaxIssuance(
+    // The assetId of the control token
+    assetId controlTokenId,
+    // Issuer's public key
+    pubkey issuerPk
+) {
+    // Constants for metadata keys
+    const KEY_TOTAL_MINTED = bytes("totalMinted");
+    const KEY_MAX_SUPPLY = bytes("maxSupply");
+
+    function mint(
+        sig: Sig,
+        mintAmount: bigint,
+        
+        // State from input metadata
+        totalMinted: bigint,
+        maxSupply: bigint,
+
+        // Merkle proofs for state verification
+        merkleProofTotalMinted: bytes32[4],
+        merkleProofMaxSupply: bytes32[4],
+        pathTotalMinted: bigint,
+        pathMaxSupply: bigint,
+
+        // New state and proof for output metadata
+        newTotalMinted: bigint,
+        merkleProofNewTotalMinted: bytes32[4],
+        pathNewTotalMinted: bigint
+    ) {
+        require(checkSig(sig, issuerPk), "Invalid signature");
+
+        let controlGroup = tx.assetGroups.find(controlTokenId);
+        require(controlGroup != null, "Control token not found");
+
+        // Get both metadata hashes at once and verify state
+        let [inputMetadataHash, outputMetadataHash] = op_inspect_assetgroup_metadatahash(controlGroup.index, 2);
+
+        // Verify old state from input metadata
+        let totalMintedLeaf = sha256(KEY_TOTAL_MINTED + serialize(totalMinted));
+        require(verifyMerkleProof(totalMintedLeaf, inputMetadataHash, merkleProofTotalMinted, pathTotalMinted), "Invalid Merkle proof for totalMinted");
+
+        let maxSupplyLeaf = sha256(KEY_MAX_SUPPLY + serialize(maxSupply));
+        require(verifyMerkleProof(maxSupplyLeaf, inputMetadataHash, merkleProofMaxSupply, pathMaxSupply), "Invalid Merkle proof for maxSupply");
+
+        // Check issuance logic
+        require(totalMinted + mintAmount == newTotalMinted, "Incorrect new total minted amount");
+        require(newTotalMinted <= maxSupply, "Exceeds max supply");
+
+        // Verify new state in output metadata
+        let newTotalMintedLeaf = sha256(KEY_TOTAL_MINTED + serialize(newTotalMinted));
+        require(verifyMerkleProof(newTotalMintedLeaf, outputMetadataHash, merkleProofNewTotalMinted, pathNewTotalMinted), "Invalid Merkle proof for new totalMinted");
+    }
+
+    // Helper function to verify a Merkle proof
+    function verifyMerkleProof(leaf: bytes32, root: bytes32, proof: bytes32[4], path: bigint): bool {
+        let computed = leaf;
+        // Unrolled loop for a tree of depth 4
+        computed = (path & 1n) ? sha256(proof[0] + computed) : sha256(computed + proof[0]);
+        computed = (path & 2n) ? sha256(proof[1] + computed) : sha256(computed + proof[1]);
+        computed = (path & 4n) ? sha256(proof[2] + computed) : sha256(computed + proof[2]);
+        computed = (path & 8n) ? sha256(proof[3] + computed) : sha256(computed + proof[3]);
+        return computed == root;
+    }
+
+    function serialize(value: bigint): bytes {
+        return bytes(value);
+    }
+}
+```
+
+#### Usage Example:
+1. **Deployment**: Deploy the contract with a new control token, setting the max supply and issuer.
+2. **Minting**: To mint new tokens, create a transaction that:
+   - Spends the control token input
+   - Creates a new token output with the desired amount
+   - Creates a new control output with updated state
+   - Includes the issuer's signature
+3. **Enforcement**: The contract ensures that:
+   - Only the authorized issuer can mint
+   - Total supply never exceeds the maximum
+   - The control token is properly preserved
+
+This pattern can be extended with additional features like:
+- Multiple authorized minters with different limits
+- Time-based minting schedules
+- Dynamic supply adjustments through governance
+- Burn mechanisms to reduce supply
+
+### 2. Teleport Batch Swap Contract
 
 This contract enforces that assets are teleported in and out correctly for batch swaps using commitments:
 
