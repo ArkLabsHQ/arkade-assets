@@ -4,7 +4,7 @@
 
 ## A) Fresh Issuance with Pre-existing Control
 
-This example demonstrates a fresh issuance of a new asset `A`, which is controlled by a pre-existing control asset `C`. The control asset `C` must be present in the same transaction for the issuance of `A` to be valid. The control asset's balance change (delta) is arbitrary; in this example, it is retained (delta=0), but this is not a requirement.
+This example demonstrates a fresh issuance of a new asset `A`, which is controlled by a pre-existing control asset `C`. The control asset `C` must be present in the same transaction for the issuance of `A` to be valid. The control asset must be present, but its input and output amounts do not need to match.
 
 ### Transaction Diagram
 
@@ -30,13 +30,13 @@ flowchart LR
   - `AssetId`: `(txidC, gidxC)` (points to an existing asset)
   - `Inputs`: `(i:0, amt:1)`
   - `Outputs`: `(o:0, amt:1)`
-  - *Result: Delta is 0, asset is retained.* 
+  - *Result: Control asset is present.* 
 
 - **Group[1] (New Asset A):**
   - `AssetId`: Omitted (fresh issuance, new ID is `(this_txid, 1)`)
   - `Issuance.ControlAsset`: `BY_ID { assetid: {txidC, gidxC} }` (points to asset C)
   - `Outputs`: `(o:1, amt:500), (o:2, amt:500)`
-  - *Result: Delta > 0, fresh issuance is valid because control asset C is present in Group[0].*
+  - *Result: Σout > Σin, fresh issuance is valid because control asset C is present in Group[0].*
 
 ### Code Example (TypeScript)
 
@@ -80,7 +80,7 @@ const payload: Packet = {
 
 ## B) Simple Transfer
 
-This example shows a standard transfer of a single asset (`LOL`) from multiple inputs to multiple outputs. The key requirement for a valid transfer is that the total amount of the asset in the inputs equals the total amount in the outputs (i.e., delta = 0).
+This example shows a standard transfer of a single asset (`LOL`) from multiple inputs to multiple outputs. The key requirement for a valid transfer is that the total amount of the asset in the inputs equals the total amount in the outputs (i.e., Σinputs = Σoutputs).
 
 ### Transaction Diagram
 
@@ -106,7 +106,7 @@ flowchart LR
   - `AssetId`: `(txidL, gidxL)`
   - `Inputs`: `(i:0, amt:100), (i:1, amt:40)`
   - `Outputs`: `(o:0, amt:70), (o:1, amt:70)`
-  - *Result: Σin (140) = Σout (140) → Delta is 0. This is a valid transfer.*
+  - *Result: Σin (140) = Σout (140). This is a valid transfer.*
 
 ### Code Example (TypeScript)
 
@@ -136,7 +136,7 @@ const payload: Packet = {
 
 ## C) Asset Burn
 
-This example demonstrates how to burn assets. A burn occurs when the sum of an asset's inputs is greater than the sum of its outputs (delta < 0). In this case, two inputs containing the `XYZ` asset are spent, but no outputs are created for that asset group, resulting in the total amount being burned.
+This example demonstrates how to burn assets. A burn occurs when the sum of an asset's inputs is greater than the sum of its outputs (Σinputs > Σoutputs). In this case, two inputs containing the `XYZ` asset are spent, but no outputs are created for that asset group, resulting in the total amount being burned.
 
 ### Transaction Diagram
 
@@ -158,7 +158,7 @@ flowchart LR
   - `AssetId`: `(txidX, gidxX)`
   - `Inputs`: `(i:0, amt:30), (i:1, amt:10)`
   - `Outputs`: `[]`
-  - *Result: Σin (40) > Σout (0) → Delta is -40. This is a valid burn.*
+  - *Result: Σin (40) > Σout (0). This is a valid burn.*
 
 ### Code Example (TypeScript)
 
@@ -185,7 +185,7 @@ const payload: Packet = {
 
 ## D) Reissuance with Control
 
-This example shows how to reissue more units of an existing asset (`A`). Reissuance is a transaction where the output amount of an asset is greater than its input amount (delta > 0). This is only allowed if the asset was created with a control asset, and that control asset (`C`) is present in the reissuance transaction.
+This example shows how to reissue more units of an existing asset (`A`). Reissuance is a transaction where the output amount of an asset is greater than its input amount (Σoutputs > Σinputs). This is only allowed if the asset was created with a control asset, and that control asset (`C`) is present in the reissuance transaction.
 
 ### Transaction Diagram
 
@@ -217,7 +217,7 @@ flowchart LR
   - `AssetId`: `(txidA, gidxA)`
   - `Inputs`: `(i:1, amt:200)`
   - `Outputs`: `(o:1, amt:230)`
-  - *Result: Σout (230) > Σin (200) → Delta is +30. This reissuance is valid because its control asset `C` is present in Group[0].*
+  - *Result: Σout (230) > Σin (200). This reissuance is valid because its control asset `C` is present in Group[0].*
 
 ### Code Example (TypeScript)
 
@@ -660,30 +660,28 @@ This advanced contract creates a synthetic asset (`SynthUSD`) that is pegged to 
 
 The script uses introspection opcodes to check the asset balances for both the synthetic and base assets across inputs and outputs.
 
-1.  **Get Deltas:** It calculates the change in balance (delta) for both `SynthUSD` and `BaseAsset`.
-2.  **Enforce Peg:** It verifies that `delta(SynthUSD) + delta(BaseAsset) == 0`. This means that for every unit of `SynthUSD` created, one unit of `BaseAsset` must be deposited, and for every unit of `SynthUSD` burned, one unit of `BaseAsset` is returned.
+1.  **Get Input and Output Sums:** It calculates the sum of inputs and outputs for both `SynthUSD` and `BaseAsset`.
+2.  **Enforce Peg:** It verifies that `(Σout_Synth - Σin_Synth) + (Σout_Base - Σin_Base) == 0`. This means that for every unit of `SynthUSD` created, one unit of `BaseAsset` must be deposited, and for every unit of `SynthUSD` burned, one unit of `BaseAsset` is returned.
 
 ### Arkade Script Opcodes
 
 ```
-// Get delta for SynthUSD (assuming it's the asset on the output)
-OP_GETASSET_GROUP_DELTAS
-OP_PUSHINT_0 // group index of SynthUSD
-OP_NTH
+// Assume synth_gidx and base_gidx are on the stack
 
-// Get delta for BaseAsset
-OP_PUSHBYTES_32 <base_asset_txid>
-OP_PUSHBYTES_1 <base_asset_gidx>
-OP_ASSETID
-OP_GETASSET_GROUP_DELTAS
-OP_PUSHINT_1 // group index of BaseAsset
-OP_NTH
+// Calculate delta for SynthUSD: (sumOutputs - sumInputs)
+<synth_gidx> <1> OP_INSPECTASSETGROUPSUM
+<synth_gidx> <0> OP_INSPECTASSETGROUPSUM
+OP_SUB
+
+// Calculate delta for BaseAsset: (sumOutputs - sumInputs)
+<base_gidx> <1> OP_INSPECTASSETGROUPSUM
+<base_gidx> <0> OP_INSPECTASSETGROUPSUM
+OP_SUB
 
 // Verify peg: delta(SynthUSD) + delta(BaseAsset) == 0
 OP_ADD
-OP_PUSHINT_0
-OP_EQUAL
-OP_VERIFY
+OP_0
+OP_EQUALVERIFY
 ```
 
 ### Transaction Diagram (Issuance)
