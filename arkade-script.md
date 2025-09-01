@@ -147,9 +147,3 @@ struct TeleportIn {
     amount: bigint
 }
 ```
-
----
-
-## Example Contracts
-
-For detailed contract examples, including diagrams, packet definitions, and code, please see [examples.md](./examples.md).

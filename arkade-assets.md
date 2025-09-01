@@ -422,4 +422,3 @@ This mechanism ensures that Arkade Assets work seamlessly within Arkade's batch 
 
 ---
 
-```

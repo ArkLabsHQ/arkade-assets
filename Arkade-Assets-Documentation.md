@@ -422,7 +422,6 @@ This mechanism ensures that Arkade Assets work seamlessly within Arkade's batch 
 
 ---
 
-```
 
 
 <div style="page-break-after: always;"></div>
@@ -577,12 +576,6 @@ struct TeleportIn {
     amount: bigint
 }
 ```
-
----
-
-## Example Contracts
-
-For detailed contract examples, including diagrams, packet definitions, and code, please see [examples.md](./examples.md).
 
 
 <div style="page-break-after: always;"></div>
@@ -1621,7 +1614,7 @@ To ensure fair and unpredictable breeding, we introduce entropy using a **commit
 2.  **Oracle Randomness**: A trusted oracle provides a random value (`oracleRand`) and signs it, binding it to the user's specific commit transaction. To prevent oracle bias (where the oracle could try many random values and pick a favorable one), the oracle **must** operate as a **Verifiable Random Function (VRF)**. A VRF ensures that for a given input (the commit transaction ID), there is only one possible valid random output, removing the oracle's ability to influence the outcome.
 3.  **Reveal**: The user reveals their secret `salt` and combines it with the `oracleRand`. This combined, unpredictable value is used as entropy to generate the new Kitty's genome.
 
-This two-step process ensures that neither the user nor the oracle can unilaterally control the outcome, making the breeding process genuinely random and exciting.
+This two-step process ensures that neither the user nor the oracle can unilaterally control the outcome, making the breeding process genuinely random.
 
 
 <div style="page-break-after: always;"></div>
