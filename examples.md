@@ -16,12 +16,6 @@ flowchart LR
   TX --> o1["output index 1<br/>• A: 500"]
   TX --> o2["output index 2<br/>• A: 500"]
 
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0 in;
-  class TX tx;
-  class o0,o1,o2 out;
 ```
 
 ### Asset Packet Definition
@@ -92,12 +86,6 @@ flowchart LR
   TX --> o0["output index 0<br/>• LOL: 70"]
   TX --> o1["output index 1<br/>• LOL: 70"]
 
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0,i1 in;
-  class o0,o1 out;
-  class TX tx;
 ```
 
 ### Asset Packet Definition
@@ -146,10 +134,6 @@ flowchart LR
   i0["input index 0<br/>• XYZ: 30"] --> TX
   i1["input index 1<br/>• XYZ: 10"] --> TX
 
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0,i1 in;
-  class TX tx;
 ```
 
 ### Asset Packet Definition
@@ -197,12 +181,6 @@ flowchart LR
   TX --> o0["output index 0<br/>• C: 1"]
   TX --> o1["output index 1<br/>• A: 230"]
 
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0,i1 in;
-  class o0,o1 out;
-  class TX tx;
 ```
 
 ### Asset Packet Definition
@@ -257,13 +235,6 @@ flowchart LR
   i0["input index 0<br/>• X: 10<br/>• Y: 50"] --> TX
   TX --> o0["output index 0<br/>• X: 10"]
   TX --> o1["output index 1<br/>• Y: 50"]
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0 in;
-  class o0,o1 out;
-  class TX tx;
 ```
 
 ### Asset Packet Definition
@@ -325,13 +296,6 @@ flowchart LR
     i1["input 1<br/>• Q: 50"] --> TX
     TX --> o1["output 1<br/>• Q: 50"]
   end
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0,i1 in;
-  class o0,o1 out;
-  class TX tx;
 ```
 
 ### Asset Packet Definition
@@ -388,12 +352,6 @@ flowchart LR
   TX --> o0["output 0<br/>• C: 1"]
   TX --> o1["output 1<br/>• A: 1000<br/>(new metadata)"]
 
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0,i1 in;
-  class o0,o1 out;
-  class TX tx;
 ```
 
 ### Asset Packet Definition
@@ -456,12 +414,6 @@ flowchart LR
   i0["input 0<br/>• T: 100"] --> CommitTX
   CommitTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• hash(secret)"]
 
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f5d0fe,stroke:#86198f,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0 in;
-  class o_teleport out;
-  class CommitTX tx;
 ```
 
 **Reveal Transaction**
@@ -471,12 +423,6 @@ flowchart LR
   i_teleport["Teleport Input<br/>• T: 100<br/>• secret"] --> RevealTX
   RevealTX --> o0["output 0<br/>• T: 100"]
 
-  classDef in fill:#f5d0fe,stroke:#86198f,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i_teleport in;
-  class o0 out;
-  class RevealTX tx;
 ```
 
 ### Asset Packet Definitions
@@ -583,12 +529,6 @@ flowchart LR
   TX --> o0
   TX --> o1
 
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0,i1 in;
-  class o0,o1 out;
-  class TX tx;
 ```
 
 ---
@@ -641,13 +581,6 @@ flowchart LR
   sig2 --> TX
   TX --> o0
 
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0 in;
-  class o0 out;
-  class sig1,sig2 in;
-  class TX tx;
 ```
 
 ---
@@ -702,11 +635,4 @@ flowchart LR
   i0 --> TX
   TX --> o0
   TX --> o1
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0 in;
-  class o0,o1 out;
-  class TX tx;
 ```
