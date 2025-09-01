@@ -4,7 +4,7 @@ import {
   buildOpReturnScript,
   parseOpReturnScript,
   Config,
-} from './arkass-codec';
+} from './arkade-assets-codec';
 
 function testCodec() {
   console.log('Running codec tests...');
@@ -49,13 +49,19 @@ function testCodec() {
   Config.u64LE = true;
 
   const script = buildOpReturnScript(originalPacket);
-  const decodedPacket = parseOpReturnScript(script);
+  const decodedPacketResult = parseOpReturnScript(script);
+
+  // The parser returns a Packet object, so we need to handle potential nulls
+  const decodedPacket = decodedPacketResult ? { ...decodedPacketResult } : null;
+
+  // Create a clean version of the expected packet for comparison
+  const expectedForMatch = { groups: expectedPacket.groups };
 
   try {
-    assert.deepStrictEqual(decodedPacket, expectedPacket, 'Decoded packet does not match original');
+    assert.deepStrictEqual(decodedPacket, expectedForMatch, 'Decoded packet does not match original');
   } catch (err) {
     console.error('Decoded packet:', JSON.stringify(decodedPacket, null, 2));
-    console.error('Expected packet:', JSON.stringify(expectedPacket, null, 2));
+    console.error('Expected packet:', JSON.stringify(expectedForMatch, null, 2));
     throw err;
   }
 

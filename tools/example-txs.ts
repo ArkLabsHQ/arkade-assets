@@ -1,7 +1,7 @@
 // tools/example-txs.ts
-// Example transactions for ArkAssetV1.
+// Example transactions for Arkade Asset V1.
 
-import { buildOpReturnScript, bufToHex, Packet } from './arkass-codec';
+import { buildOpReturnScript, bufToHex, Packet } from './arkade-assets-codec';
 
 interface TxVout {
   n: number;

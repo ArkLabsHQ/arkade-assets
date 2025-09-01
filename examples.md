@@ -1,4 +1,4 @@
-# ArkAsset Transaction Examples
+# Arkade Asset Transaction Examples
 
 ---
 
@@ -40,10 +40,10 @@ flowchart LR
 
 ### Code Example (TypeScript)
 
-This is how you would construct the transaction packet using the `arkass-codec` library.
+This is how you would construct the transaction packet using the `arkade-assets-codec` library.
 
 ```typescript
-import { Packet } from './arkass-codec';
+import { Packet } from './arkade-assets-codec';
 
 // Example A: fresh issuance with a pre-existing control asset.
 const controlTxidHex = '11'.repeat(32);
@@ -111,7 +111,7 @@ flowchart LR
 ### Code Example (TypeScript)
 
 ```typescript
-import { Packet } from './arkass-codec';
+import { Packet } from './arkade-assets-codec';
 
 const lolAssetId = { txidHex: '70'.repeat(32), gidx: 0 };
 
@@ -163,7 +163,7 @@ flowchart LR
 ### Code Example (TypeScript)
 
 ```typescript
-import { Packet } from './arkass-codec';
+import { Packet } from './arkade-assets-codec';
 
 const xyzAssetId = { txidHex: '88'.repeat(32), gidx: 0 }; // Placeholder
 
@@ -222,7 +222,7 @@ flowchart LR
 ### Code Example (TypeScript)
 
 ```typescript
-import { Packet } from './arkass-codec';
+import { Packet } from './arkade-assets-codec';
 
 const controlAssetId = { txidHex: 'cc'.repeat(32), gidx: 0 };
 const reissuedAssetId = { txidHex: 'aa'.repeat(32), gidx: 1 };
@@ -283,7 +283,7 @@ flowchart LR
 ### Code Example (TypeScript)
 
 ```typescript
-import { Packet } from './arkass-codec';
+import { Packet } from './arkade-assets-codec';
 
 const assetX = { txidHex: '55'.repeat(32), gidx: 0 };
 const assetY = { txidHex: '66'.repeat(32), gidx: 1 };
@@ -351,7 +351,7 @@ flowchart LR
 ### Code Example (TypeScript)
 
 ```typescript
-import { Packet } from './arkass-codec';
+import { Packet } from './arkade-assets-codec';
 
 const assetP = { txidHex: 'ab'.repeat(32), gidx: 0 };
 const assetQ = { txidHex: 'cd'.repeat(32), gidx: 0 };
@@ -414,7 +414,7 @@ flowchart LR
 ### Code Example (TypeScript)
 
 ```typescript
-import { Packet } from './arkass-codec';
+import { Packet } from './arkade-assets-codec';
 
 const controlAssetId = { txidHex: 'cc'.repeat(32), gidx: 0 };
 const assetToUpdateId = { txidHex: 'aa'.repeat(32), gidx: 1 };
@@ -494,7 +494,7 @@ flowchart LR
 ### Code Example (TypeScript)
 
 ```typescript
-import { Packet } from './arkass-codec';
+import { Packet } from './arkade-assets-codec';
 import { createHash } from 'crypto';
 
 const teleportAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };

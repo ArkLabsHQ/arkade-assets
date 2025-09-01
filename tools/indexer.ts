@@ -228,13 +228,11 @@ export class Indexer {
 
   parseArkassFromTx(tx: Tx): (Packet & { outputIndex: number }) | null {
     for (const out of tx.vout || []) {
-      const hex = (out.scriptPubKey || '').toLowerCase();
-      if (!hex.startsWith('6a')) continue;
-      try {
-        const bytes = codec.hexToBytes(hex);
-        const parsed = codec.parseOpReturnScript(bytes);
+      const scriptBytes = codec.hexToBytes(out.scriptPubKey || '');
+      const parsed = codec.parseOpReturnScript(scriptBytes);
+      if (parsed) {
         return { ...parsed, outputIndex: out.n };
-      } catch (e) { /* Not ArkAsset payload */ }
+      }
     }
     return null;
   }

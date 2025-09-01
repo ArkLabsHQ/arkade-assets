@@ -1,10 +1,10 @@
 // tools/cli.ts
-// Command-line interface for ArkAsset tools.
+// Command-line interface for Arkade Asset tools.
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildTxFromPayload, Tx } from './make-opreturn';
-import { Packet } from './arkass-codec';
+import { Packet } from './arkade-assets-codec';
 import { exampleA, exampleB, exampleC, exampleE_metadata_update } from './example-txs';
 import { Indexer } from './indexer';
 import { NodeFileStorage } from './node-storage';

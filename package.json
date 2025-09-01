@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node dist/arkass-codec.test.js",
+    "test": "npm run build && node dist/arkade-assets-codec.test.js",
     "cli": "npm run build && node dist/cli.js",
     "indexer:init": "npm run cli -- indexer init",
     "indexer:apply": "npm run cli -- indexer apply",

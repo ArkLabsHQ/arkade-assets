@@ -1,8 +1,8 @@
-# ArkAssetV1 Specification (Working Draft)
+# Arkade Asset V1 Specification (Working Draft)
 
 ## 1. Overview
 
-ArkAssetV1 is UTXO-native asset system for Bitcoin transactions inspired by Runes and Liquid Assets.
+Arkade Asset V1 is UTXO-native asset system for Bitcoin transactions inspired by Runes and Liquid Assets.
 
 Within Arkade, it requires no indexers: simply parsing the transaction is enough to observe and validate asset interactions. This is due to Arkade Signer's cosigning guard which validates before cosigning, along with its TEE assurances for verifibale honesty.
 
@@ -10,7 +10,7 @@ However, if used onchain, indexers/validators are required to follow the chain (
 
 Assets are identified by 2 pieces of data, its genesis transaction hash, and group index. `(genesis_txid, group_index)`
 
-Assets are projected onto Bitcoin transactions by embedding a well-defined data packet, the ArkAssetV1 packet, in a Bitcoin output via OP_RETURN semantics.
+Assets are projected onto Bitcoin transactions by embedding a well-defined data packet, the Arkade Asset V1 packet, in a Bitcoin output via OP_RETURN semantics.
 
 This data packet contains a set of (ordered) Asset Groups, which define asset details along with indexes of transaction inputs and outputs that are caarying this asset and the amounts. The order is important for fresh asset mint operations.
 
@@ -22,8 +22,7 @@ When a fresh asset is being created, it may refer to another asset as its contro
 
 Control assets allow additional, future reissuance of a token, and are themselves assets. When a positive delta (Σout > Σin) is detected in an asset group that specifies a control asset, that control asset MUST appear in the same transaction. This requirement applies to both fresh issuance and reissuance. If an asset did not specify a control asset at genesis, it cannot be reissued.
 
-ArkAssetV1 supports projecting multiple assets unto a UTXO.\
-BTC amounts are orthogonal and not included in asset accounting.
+Arkade Asset V1 supports projecting multiple assets unto a single UTXO, and BTC amounts are orthogonal and not included in asset accounting.
 
 Asset amounts are atomic units, and supply management is managed through UTXO spending conditions.
 
@@ -33,18 +32,27 @@ Asset amounts are atomic units, and supply management is managed through UTXO sp
 
 ## 2. OP\_RETURN structure
 
-Exactly **one OP\_RETURN output** must contain the ArkAssetV1 packet:
+Exactly **one OP\_RETURN output** must contain the protocol packet, prefixed with magic bytes. The packet itself is a top-level TLV (Type-Length-Value) stream, allowing multiple data types to coexist within a single transaction.
 
 ```
-scriptPubKey = OP_RETURN <0x41 0x52 0x4b 0x41 0x53 0x53 || Payload>
-                          "A"   "R"  "K"  "A"  "S"  "S"
-
+scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 ```
 
-- Magic prefix: `0x41 0x52 0x4b 0x41 0x53 0x53` (“ARKASS”)
-- Payload: TLV\_PACKET (see below)
+- **Magic_Bytes**: `0x41524b` ("ARK")
+- **TLV_Stream**: A concatenation of one or more TLV records.
+- **TLV Record**: `Type (1-byte) || Length (CompactSize) || Value (bytes)`
 
-Note (implicit burn policy): If a Bitcoin transaction spends any UTXOs that are known (to an indexer or Arkade) to carry ArkAsset balances and contains no ArkAssetV1 OP_RETURN at all, those balances are considered irrecoverably burned. Indexers MUST remove such balances from their state and MUST NOT assign them to any outputs.
+### Arkade Asset V1 Packet (Type 0x00)
+
+The ArkAsset data is identified by `Type = 0x00`. The `Value` of this record is the asset payload itself.
+
+```
+<Type: 0x00> <Length: L> <Value: Asset_Payload>
+```
+
+- **Asset_Payload**: The TLV packet containing asset group data (see below).
+
+**Note (Implicit Burn Policy):** If a transaction spends any UTXOs known to carry ArkAsset balances but contains no `OP_RETURN` with an ArkAsset packet (Type `0x00`), those balances are considered irrecoverably burned. Indexers MUST remove such balances from their state.
 
 ---
 
@@ -410,7 +418,7 @@ In the Arkade context:
 - Asset balances are preserved across the VTXO transition
 - No additional operator infrastructure is required
 
-This mechanism ensures that ArkAssets work seamlessly within Arkade's batch swap architecture while maintaining the protocol's trust-minimized properties.
+This mechanism ensures that Arkade Assets work seamlessly within Arkade's batch swap architecture while maintaining the protocol's trust-minimized properties.
 
 ---
 

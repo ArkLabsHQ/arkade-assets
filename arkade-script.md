@@ -1,6 +1,6 @@
 # Arkade Script Opcodes
 
-This document outlines the introspection opcodes available in Arkade Script for interacting with ArkAssets, along with the high-level API structure and example contracts.
+This document outlines the introspection opcodes available in Arkade Script for interacting with Arkade Assets, along with the high-level API structure and example contracts.
 
 ## Introspection Opcodes
 
@@ -14,7 +14,7 @@ All Asset Ids are handled as **two stack items**: `(txid32, gidx_u16)`.
 ### Groups
 
 - `OP_INSPECTNUMASSETGROUPS` → *[out]* `K`\
-  *Number of groups in the ArkAssetV1 packet.*
+  *Number of groups in the Arkade AssetV1 packet.*
 - `OP_INSPECTASSETGROUPASSETID k` → *[out]* `assetid_txid32  assetid_gidx_u16`\
   *Resolved AssetId of group **k**. Fresh groups use **this_txid**.*
 - `OP_INSPECTASSETGROUPCTRL k` → *[out]* `ctrl_txid32  ctrl_gidx_u16 | OP_0`\
@@ -64,7 +64,7 @@ All Asset Ids are handled as **two stack items**: `(txid32, gidx_u16)`.
 
 ## Asset Introspection API
 
-ArkAssets extend Arkade Script with asset-specific introspection, following a pattern similar to other smart contract languages:
+Arkade Assets extend Arkade Script with asset-specific introspection, following a pattern similar to other smart contract languages:
 
 ```javascript
 // Transaction basics

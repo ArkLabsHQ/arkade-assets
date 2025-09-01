@@ -1,5 +1,5 @@
-// tools/arkass-codec.ts
-// Encoding and decoding helpers for ArkAssetV1 OP_RETURN payloads and scriptPubKey.
+// tools/arkade-assets-codec.ts
+// Encoding and decoding helpers for Arkade Asset V1 OP_RETURN payloads and scriptPubKey.
 
 // --- Universal Buffer/Array Utilities ---
 
@@ -245,6 +245,15 @@ function decodeVarUint(buf: Uint8Array, off: number): { value: number; size: num
   return decodeCompactSize(buf, off);
 }
 
+function encodeTlv(type: number, value: Uint8Array): Uint8Array {
+  if (type > 255 || type < 0) throw new Error('TLV type must be a byte');
+  return concatBytes(
+    new Uint8Array([type]),
+    encodeCompactSize(value.length),
+    value
+  );
+}
+
 function encodePushData(data: Uint8Array): Uint8Array {
   const len = data.length;
   if (len <= 75) return concatBytes(new Uint8Array([len]), data);
@@ -393,17 +402,33 @@ export function encodePacket(packet: Packet): Uint8Array {
   return concatBytes(...groupParts);
 }
 
-export function buildArkassPayload(payload: Packet): Uint8Array {
-  const magic = new TextEncoder().encode('ARKASS');
-  const body = encodePacket(payload);
-  return concatBytes(magic, body);
+export function buildOpReturnPayload(packet: Packet): Uint8Array {
+  const magic = hexToBytes('41524b'); // "ARK"
+  const assetPayload = encodePacket(packet);
+  const tlvStream = encodeTlv(0x00, assetPayload);
+  return concatBytes(magic, tlvStream);
 }
 
-export function buildOpReturnScript(payload: Packet): Uint8Array {
-  const fullPayload = buildArkassPayload(payload);
+export function buildOpReturnScript(packet: Packet): Uint8Array {
+  const fullPayload = buildOpReturnPayload(packet);
   const opReturn = new Uint8Array([0x6a]);
   const push = encodePushData(fullPayload);
   return concatBytes(opReturn, push);
+}
+
+function decodeTlvStream(buf: Uint8Array, off: number): { records: { type: number, value: Uint8Array }[], next: number } {
+  let cursor = off;
+  const records: { type: number, value: Uint8Array }[] = [];
+  while (cursor < buf.length) {
+    const type = buf[cursor];
+    cursor += 1;
+    const lenResult = decodeCompactSize(buf, cursor);
+    cursor += lenResult.size;
+    const value = buf.slice(cursor, cursor + lenResult.value);
+    cursor += lenResult.value;
+    records.push({ type, value });
+  }
+  return { records, next: cursor };
 }
 
 // ---------------- DECODING ----------------
@@ -544,18 +569,32 @@ export function decodePacket(buf: Uint8Array, off = 0): { groups: Group[]; next:
   return { groups, next: cursor };
 }
 
-export function parseArkassPayload(payload: Uint8Array): Packet {
-  const magic = new TextEncoder().encode('ARKASS');
-  if (payload.length < magic.length) throw new Error('payload too short');
-    if (!bytesEqual(payload.slice(0, magic.length), magic)) throw new Error('magic mismatch');
-  let cursor = magic.length;
-  const { groups } = decodePacket(payload, cursor);
-  return { groups };
-}
+export function parseOpReturnScript(buf: Uint8Array): Packet | null {
+  if (buf.length < 2 || buf[0] !== 0x6a) return null;
 
-export function parseOpReturnScript(buf: Uint8Array): Packet {
-  if (buf.length < 2) throw new Error('script too short');
-  if (buf[0] !== 0x6a) throw new Error('not an OP_RETURN script');
-  const { data } = decodePushData(buf, 1);
-  return parseArkassPayload(data);
+  try {
+    const { data } = decodePushData(buf, 1);
+    const magic = hexToBytes('41524b'); // "ARK"
+
+    if (data.length < magic.length || !bytesEqual(data.slice(0, magic.length), magic)) {
+      return null; // Not an ARK packet
+    }
+
+    const { records } = decodeTlvStream(data, magic.length);
+    const assetRecord = records.find(r => r.type === 0x00);
+
+    if (!assetRecord) {
+      // This is an ARK packet but contains no asset data (e.g., for another protocol using the same magic).
+      // For our purposes, it's like there's no packet.
+      return { groups: [] };
+    }
+
+    const { groups } = decodePacket(assetRecord.value, 0);
+    return { groups };
+
+  } catch (e) {
+    // Decoding error, treat as not a valid packet.
+    console.error('Error parsing OP_RETURN script:', e);
+    return null;
+  }
 }
