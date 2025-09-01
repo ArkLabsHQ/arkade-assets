@@ -3,8 +3,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { buildTxFromPayload } from './make-opreturn';
-import { exampleA, exampleB, exampleC } from './example-txs';
+import { buildTxFromPayload, Tx } from './make-opreturn';
+import { Packet } from './arkass-codec';
+import { exampleA, exampleB, exampleC, exampleE_metadata_update } from './example-txs';
 import { Indexer } from './indexer';
 import { NodeFileStorage } from './node-storage';
 
@@ -32,9 +33,48 @@ function handleMakeTx(args: { [key: string]: any }): void {
       case 'C':
         tx = exampleC(txidHex);
         break;
+      case 'E':
+        tx = exampleE_metadata_update(txidHex);
+        break;
       default:
         console.error(`Unknown example: ${args.example}`);
         process.exit(1);
+    }
+  } else if (args['update-metadata']) {
+    try {
+      const assetIdParts = (args['asset-id'] as string).split(':');
+      const controlIdParts = (args['control-id'] as string).split(':');
+      const controlVinParts = (args['control-vin'] as string).split(':');
+      const assetVinParts = (args['asset-vin'] as string).split(':');
+      const metadata = JSON.parse(fs.readFileSync(args['metadata-file'] as string, 'utf8'));
+
+      const payload: Packet = {
+        groups: [
+          {
+            assetId: { txidHex: controlIdParts[0], gidx: parseInt(controlIdParts[1]) },
+            inputs: [{ type: 'LOCAL', i: 0, amt: 1n }],
+            outputs: [{ type: 'LOCAL', o: parseInt(args['control-vout'] as string), amt: 1n }]
+          },
+          {
+            assetId: { txidHex: assetIdParts[0], gidx: parseInt(assetIdParts[1]) },
+            metadata: metadata,
+            inputs: [{ type: 'LOCAL', i: 1, amt: BigInt(args['asset-amt'] as string) }],
+            outputs: [{ type: 'LOCAL', o: parseInt(args['asset-vout'] as string), amt: BigInt(args['asset-amt'] as string) }]
+          }
+        ]
+      };
+
+      const vins = [
+        { txid: controlVinParts[0], vout: parseInt(controlVinParts[1]) },
+        { txid: assetVinParts[0], vout: parseInt(assetVinParts[1]) }
+      ];
+
+      tx = buildTxFromPayload(payload, txidHex, vins);
+
+    } catch (error: any) {
+      console.error(`Error processing update-metadata command: ${error.message}`);
+      console.error('Usage: cli.ts make-tx --update-metadata --asset-id=<txid:gidx> --control-id=<txid:gidx> --control-vin=<txid:vout> --asset-vin=<txid:vout> --asset-amt=<amount> --metadata-file=<path> --asset-vout=<n> --control-vout=<n>');
+      process.exit(1);
     }
   } else if (args.groups) {
     try {
@@ -51,7 +91,7 @@ function handleMakeTx(args: { [key: string]: any }): void {
       process.exit(1);
     }
   } else {
-    console.error('Usage: cli.ts make-tx --example=A|B or --groups=path/to/groups.json');
+    console.error('Usage: cli.ts make-tx --example=A|B|C|E | --groups=<file> | --update-metadata ...');
     process.exit(1);
   }
 

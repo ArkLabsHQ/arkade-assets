@@ -1,0 +1,714 @@
+# ArkAsset Transaction Examples
+
+---
+
+## A) Fresh Issuance with Pre-existing Control
+
+This example demonstrates a fresh issuance of a new asset `A`, which is controlled by a pre-existing control asset `C`. The control asset `C` must be present in the same transaction for the issuance of `A` to be valid. The control asset's balance change (delta) is arbitrary; in this example, it is retained (delta=0), but this is not a requirement.
+
+### Transaction Diagram
+
+```mermaid
+flowchart LR
+  TX[(this_txid)]
+  i0["input index 0<br/>• C: 1"] --> TX
+  TX --> o0["output index 0<br/>• C: 1"]
+  TX --> o1["output index 1<br/>• A: 500"]
+  TX --> o2["output index 2<br/>• A: 500"]
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0 in;
+  class TX tx;
+  class o0,o1,o2 out;
+```
+
+### Asset Packet Definition
+
+- **Group[0] (Control Asset C):**
+  - `AssetId`: `(txidC, gidxC)` (points to an existing asset)
+  - `Inputs`: `(i:0, amt:1)`
+  - `Outputs`: `(o:0, amt:1)`
+  - *Result: Delta is 0, asset is retained.* 
+
+- **Group[1] (New Asset A):**
+  - `AssetId`: Omitted (fresh issuance, new ID is `(this_txid, 1)`)
+  - `Issuance.ControlAsset`: `BY_ID { assetid: {txidC, gidxC} }` (points to asset C)
+  - `Outputs`: `(o:1, amt:500), (o:2, amt:500)`
+  - *Result: Delta > 0, fresh issuance is valid because control asset C is present in Group[0].*
+
+### Code Example (TypeScript)
+
+This is how you would construct the transaction packet using the `arkass-codec` library.
+
+```typescript
+import { Packet } from './arkass-codec';
+
+// Example A: fresh issuance with a pre-existing control asset.
+const controlTxidHex = '11'.repeat(32);
+const controlGidx = 0;
+
+const payload: Packet = {
+  groups: [
+    // Group[0] Control: A pre-existing control asset, spent and re-created.
+    {
+      assetId: { txidHex: controlTxidHex, gidx: controlGidx },
+      inputs: [{ type: 'LOCAL', i: 0, amt: 1n }],
+      outputs: [{ type: 'LOCAL', o: 0, amt: 1n }]
+    },
+    // Group[1] Token: A fresh issuance, controlled by group 0.
+    {
+      issuance: {
+        controlAsset: { gidx: 0 }, // References Group[0] implicitly
+        metadata: { name: 'Token A' },
+        immutable: false,
+      },
+      inputs: [],
+      outputs: [
+        { type: 'LOCAL', o: 1, amt: 500n },
+        { type: 'LOCAL', o: 2, amt: 500n }
+      ]
+    },
+  ]
+};
+
+// This payload would then be encoded and put into an OP_RETURN.
+```
+
+---
+
+## B) Simple Transfer
+
+This example shows a standard transfer of a single asset (`LOL`) from multiple inputs to multiple outputs. The key requirement for a valid transfer is that the total amount of the asset in the inputs equals the total amount in the outputs (i.e., delta = 0).
+
+### Transaction Diagram
+
+```mermaid
+flowchart LR
+  TX[(TX)]
+  i0["input index 0<br/>• LOL: 100"] --> TX
+  i1["input index 1<br/>• LOL: 40"] --> TX
+  TX --> o0["output index 0<br/>• LOL: 70"]
+  TX --> o1["output index 1<br/>• LOL: 70"]
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0,i1 in;
+  class o0,o1 out;
+  class TX tx;
+```
+
+### Asset Packet Definition
+
+- **Group[0] (Asset LOL):**
+  - `AssetId`: `(txidL, gidxL)`
+  - `Inputs`: `(i:0, amt:100), (i:1, amt:40)`
+  - `Outputs`: `(o:0, amt:70), (o:1, amt:70)`
+  - *Result: Σin (140) = Σout (140) → Delta is 0. This is a valid transfer.*
+
+### Code Example (TypeScript)
+
+```typescript
+import { Packet } from './arkass-codec';
+
+const lolAssetId = { txidHex: '70'.repeat(32), gidx: 0 };
+
+const payload: Packet = {
+  groups: [
+    {
+      assetId: lolAssetId,
+      inputs: [
+        { type: 'LOCAL', i: 0, amt: 100n },
+        { type: 'LOCAL', i: 1, amt: 40n },
+      ],
+      outputs: [
+        { type: 'LOCAL', o: 0, amt: 70n },
+        { type: 'LOCAL', o: 1, amt: 70n },
+      ],
+    },
+  ]
+};
+```
+
+---
+
+## C) Asset Burn
+
+This example demonstrates how to burn assets. A burn occurs when the sum of an asset's inputs is greater than the sum of its outputs (delta < 0). In this case, two inputs containing the `XYZ` asset are spent, but no outputs are created for that asset group, resulting in the total amount being burned.
+
+### Transaction Diagram
+
+```mermaid
+flowchart LR
+  TX[(TX)]
+  i0["input index 0<br/>• XYZ: 30"] --> TX
+  i1["input index 1<br/>• XYZ: 10"] --> TX
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0,i1 in;
+  class TX tx;
+```
+
+### Asset Packet Definition
+
+- **Group[0] (Asset XYZ):**
+  - `AssetId`: `(txidX, gidxX)`
+  - `Inputs`: `(i:0, amt:30), (i:1, amt:10)`
+  - `Outputs`: `[]`
+  - *Result: Σin (40) > Σout (0) → Delta is -40. This is a valid burn.*
+
+### Code Example (TypeScript)
+
+```typescript
+import { Packet } from './arkass-codec';
+
+const xyzAssetId = { txidHex: '88'.repeat(32), gidx: 0 }; // Placeholder
+
+const payload: Packet = {
+  groups: [
+    {
+      assetId: xyzAssetId,
+      inputs: [
+        { type: 'LOCAL', i: 0, amt: 30n },
+        { type: 'LOCAL', i: 1, amt: 10n },
+      ],
+      outputs: [], // No outputs for this group, so all inputs are burned
+    },
+  ]
+};
+```
+
+---
+
+## D) Reissuance with Control
+
+This example shows how to reissue more units of an existing asset (`A`). Reissuance is a transaction where the output amount of an asset is greater than its input amount (delta > 0). This is only allowed if the asset was created with a control asset, and that control asset (`C`) is present in the reissuance transaction.
+
+### Transaction Diagram
+
+```mermaid
+flowchart LR
+  TX[(TX)]
+  i0["input index 0<br/>• C: 1"] --> TX
+  i1["input index 1<br/>• A: 200"] --> TX
+  TX --> o0["output index 0<br/>• C: 1"]
+  TX --> o1["output index 1<br/>• A: 230"]
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0,i1 in;
+  class o0,o1 out;
+  class TX tx;
+```
+
+### Asset Packet Definition
+
+- **Group[0] (Control Asset C):**
+  - `AssetId`: `(txidC, gidxC)`
+  - `Inputs`: `(i:0, amt:1)`
+  - `Outputs`: `(o:0, amt:1)`
+  - *Result: Control asset is present.*
+
+- **Group[1] (Reissued Asset A):**
+  - `AssetId`: `(txidA, gidxA)`
+  - `Inputs`: `(i:1, amt:200)`
+  - `Outputs`: `(o:1, amt:230)`
+  - *Result: Σout (230) > Σin (200) → Delta is +30. This reissuance is valid because its control asset `C` is present in Group[0].*
+
+### Code Example (TypeScript)
+
+```typescript
+import { Packet } from './arkass-codec';
+
+const controlAssetId = { txidHex: 'cc'.repeat(32), gidx: 0 };
+const reissuedAssetId = { txidHex: 'aa'.repeat(32), gidx: 1 };
+
+const payload: Packet = {
+  groups: [
+    {
+      assetId: controlAssetId,
+      inputs: [{ type: 'LOCAL', i: 0, amt: 1n }],
+      outputs: [{ type: 'LOCAL', o: 0, amt: 1n }],
+    },
+    {
+      assetId: reissuedAssetId,
+      inputs: [{ type: 'LOCAL', i: 1, amt: 200n }],
+      outputs: [{ type: 'LOCAL', o: 1, amt: 230n }],
+    },
+  ]
+};
+```
+
+---
+
+## E) Multi-Asset-Per-UTXO Transfer
+
+An input UTXO is not limited to holding only one type of asset. This example demonstrates a transaction where a single input (`input index 0`) contains quantities of two different assets, `X` and `Y`. Both asset groups reference the same input index to spend their respective amounts.
+
+### Transaction Diagram
+
+```mermaid
+flowchart LR
+  TX[(TX)]
+  i0["input index 0<br/>• X: 10<br/>• Y: 50"] --> TX
+  TX --> o0["output index 0<br/>• X: 10"]
+  TX --> o1["output index 1<br/>• Y: 50"]
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0 in;
+  class o0,o1 out;
+  class TX tx;
+```
+
+### Asset Packet Definition
+
+- **Group[0] (Asset X):**
+  - `AssetId`: `(txidX, gidxX)`
+  - `Inputs`: `(i:0, amt:10)`
+  - `Outputs`: `(o:0, amt:10)`
+  - *Result: Valid transfer (delta=0).*
+
+- **Group[1] (Asset Y):**
+  - `AssetId`: `(txidY, gidxY)`
+  - `Inputs`: `(i:0, amt:50)`
+  - `Outputs`: `(o:1, amt:50)`
+  - *Result: Valid transfer (delta=0).*
+
+### Code Example (TypeScript)
+
+```typescript
+import { Packet } from './arkass-codec';
+
+const assetX = { txidHex: '55'.repeat(32), gidx: 0 };
+const assetY = { txidHex: '66'.repeat(32), gidx: 1 };
+
+const payload: Packet = {
+  groups: [
+    {
+      assetId: assetX,
+      inputs: [{ type: 'LOCAL', i: 0, amt: 10n }],
+      outputs: [{ type: 'LOCAL', o: 0, amt: 10n }],
+    },
+    {
+      assetId: assetY,
+      inputs: [{ type: 'LOCAL', i: 0, amt: 50n }],
+      outputs: [{ type: 'LOCAL', o: 1, amt: 50n }],
+    },
+  ]
+};
+```
+
+---
+
+## F) Multi-Asset-Per-Transaction Transfer
+
+A single transaction can contain operations for multiple, independent assets. This example shows two separate asset transfers (`P` and `Q`) happening within the same transaction. Each asset has its own group in the packet.
+
+### Transaction Diagram
+
+```mermaid
+flowchart LR
+  TX[(TX)]
+
+  subgraph Asset P
+    i0["input 0<br/>• P: 10"] --> TX
+    TX --> o0["output 0<br/>• P: 10"]
+  end
+
+  subgraph Asset Q
+    i1["input 1<br/>• Q: 50"] --> TX
+    TX --> o1["output 1<br/>• Q: 50"]
+  end
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0,i1 in;
+  class o0,o1 out;
+  class TX tx;
+```
+
+### Asset Packet Definition
+
+- **Group[0] (Asset P):**
+  - `AssetId`: `(txidP, gidxP)`
+  - `Inputs`: `(i:0, amt:10)`
+  - `Outputs`: `(o:0, amt:10)`
+  - *Result: Valid transfer (delta=0).*
+
+- **Group[1] (Asset Q):**
+  - `AssetId`: `(txidQ, gidxQ)`
+  - `Inputs`: `(i:1, amt:50)`
+  - `Outputs`: `(o:1, amt:50)`
+  - *Result: Valid transfer (delta=0).*
+
+### Code Example (TypeScript)
+
+```typescript
+import { Packet } from './arkass-codec';
+
+const assetP = { txidHex: 'ab'.repeat(32), gidx: 0 };
+const assetQ = { txidHex: 'cd'.repeat(32), gidx: 0 };
+
+const payload: Packet = {
+  groups: [
+    {
+      assetId: assetP,
+      inputs: [{ type: 'LOCAL', i: 0, amt: 10n }],
+      outputs: [{ type: 'LOCAL', o: 0, amt: 10n }],
+    },
+    {
+      assetId: assetQ,
+      inputs: [{ type: 'LOCAL', i: 1, amt: 50n }],
+      outputs: [{ type: 'LOCAL', o: 1, amt: 50n }],
+    },
+  ]
+};
+```
+
+---
+
+## G) Metadata Update
+
+To update the metadata of an asset, the transaction must spend and re-create both the asset being updated and its corresponding control asset. The new metadata is included in the asset's group, and the indexer will verify that the control asset was present to authorize the change.
+
+### Transaction Diagram
+
+```mermaid
+flowchart LR
+  TX[(TX)]
+  i0["input 0<br/>• C: 1"] --> TX
+  i1["input 1<br/>• A: 1000"] --> TX
+  TX --> o0["output 0<br/>• C: 1"]
+  TX --> o1["output 1<br/>• A: 1000<br/>(new metadata)"]
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0,i1 in;
+  class o0,o1 out;
+  class TX tx;
+```
+
+### Asset Packet Definition
+
+- **Group[0] (Control Asset C):**
+  - `AssetId`: `(txidC, gidxC)`
+  - `Inputs`: `(i:0, amt:1)`
+  - `Outputs`: `(o:0, amt:1)`
+  - *Result: Control asset is present.*
+
+- **Group[1] (Updated Asset A):**
+  - `AssetId`: `(txidA, gidxA)`
+  - `Metadata`: `{...}` (contains the new metadata)
+  - `Inputs`: `(i:1, amt:1000)`
+  - `Outputs`: `(o:1, amt:1000)`
+  - *Result: Valid metadata update because control asset `C` is present.*
+
+### Code Example (TypeScript)
+
+```typescript
+import { Packet } from './arkass-codec';
+
+const controlAssetId = { txidHex: 'cc'.repeat(32), gidx: 0 };
+const assetToUpdateId = { txidHex: 'aa'.repeat(32), gidx: 1 };
+
+const payload: Packet = {
+  groups: [
+    // Group 0: The control asset, spent and retained.
+    {
+      assetId: controlAssetId,
+      inputs: [{ type: 'LOCAL', i: 0, amt: 1n }],
+      outputs: [{ type: 'LOCAL', o: 0, amt: 1n }],
+    },
+    // Group 1: The asset having its metadata updated.
+    {
+      assetId: assetToUpdateId,
+      metadata: { name: 'New Token Name' }, // New metadata here
+      inputs: [{ type: 'LOCAL', i: 1, amt: 1000n }],
+      outputs: [{ type: 'LOCAL', o: 1, amt: 1000n }],
+    },
+  ]
+};
+```
+
+---
+
+## H) Teleport (Commit-Reveal)
+
+The teleport system allows assets to be moved between transactions without a direct UTXO dependency. It's a two-stage process: commit and reveal.
+
+1.  **Commit Transaction:** An asset is spent into a `TELEPORT` output, which contains a commitment hash (e.g., `sha256(secret)`).
+2.  **Reveal Transaction:** A second, unrelated transaction can claim the teleported asset by providing the secret pre-image in a `TELEPORT` input. The hash of the pre-image must match the commitment hash.
+
+### Transaction Diagrams
+
+**Commit Transaction**
+```mermaid
+flowchart LR
+  CommitTX[(Commit TX)]
+  i0["input 0<br/>• T: 100"] --> CommitTX
+  CommitTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• hash(secret)"]
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef out fill:#f5d0fe,stroke:#86198f,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0 in;
+  class o_teleport out;
+  class CommitTX tx;
+```
+
+**Reveal Transaction**
+```mermaid
+flowchart LR
+  RevealTX[(Reveal TX)]
+  i_teleport["Teleport Input<br/>• T: 100<br/>• secret"] --> RevealTX
+  RevealTX --> o0["output 0<br/>• T: 100"]
+
+  classDef in fill:#f5d0fe,stroke:#86198f,stroke-width:1px;
+  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i_teleport in;
+  class o0 out;
+  class RevealTX tx;
+```
+
+### Asset Packet Definitions
+
+**Commit Packet**
+- `AssetId`: `(txidT, gidxT)`
+- `Inputs`: `(i:0, amt:100)`
+- `Outputs`: `(type:TELEPORT, amt:100, hash:sha256(secret))`
+
+**Reveal Packet**
+- `AssetId`: `(txidT, gidxT)`
+- `Inputs`: `(type:TELEPORT, amt:100, preimg:secret)`
+- `Outputs`: `(o:0, amt:100)`
+
+### Code Example (TypeScript)
+
+```typescript
+import { Packet } from './arkass-codec';
+import { createHash } from 'crypto';
+
+const teleportAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
+const secret = Buffer.from('this is a secret pre-image');
+const commitHash = createHash('sha256').update(secret).digest();
+
+// Commit Transaction Payload
+const commitPayload: Packet = {
+  groups: [
+    {
+      assetId: teleportAssetId,
+      inputs: [{ type: 'LOCAL', i: 0, amt: 100n }],
+      outputs: [{ type: 'TELEPORT', hash: commitHash, amt: 100n }],
+    },
+  ]
+};
+
+// Reveal Transaction Payload
+const revealPayload: Packet = {
+  groups: [
+    {
+      assetId: teleportAssetId,
+      inputs: [{ type: 'TELEPORT', preimg: secret, amt: 100n }],
+      outputs: [{ type: 'LOCAL', o: 0, amt: 100n }],
+    },
+  ]
+};
+```
+
+---
+
+# Arkade Script Contract Examples
+
+## 1) Gated Asset Swap
+
+This example demonstrates an Arkade Script contract that facilitates a trustless 1-for-1 swap of Asset `A` for Asset `B`. The contract is placed on the output holding Asset `A`. To spend this output, the transaction must also provide 1 unit of Asset `B` and send it to the contract's address, ensuring a fair exchange.
+
+### Contract Logic
+
+The script performs the following checks:
+1.  **Verify Incoming Asset B:** It checks that the transaction contains an input of Asset `B` with an amount of 1.
+2.  **Verify Outgoing Asset A:** It ensures that the output containing Asset `A` is being spent.
+3.  **Verify Destination of Asset B:** It confirms that Asset `B` is being sent to the same address that held Asset `A`.
+
+### Arkade Script Opcodes
+
+```
+// Define Asset IDs
+OP_PUSHBYTES_32 <asset_B_txid>
+OP_PUSHBYTES_1 <asset_B_gidx>
+OP_ASSETID
+
+// Check that 1 unit of Asset B is an input
+OP_PUSHINT_1
+OP_GETASSET_IN
+OP_EQUAL
+OP_VERIFY
+
+// Check that Asset B is sent to the current contract's output script
+OP_PUSHINT_1
+OP_GETASSET_OUT
+OP_EQUAL
+OP_VERIFY
+```
+
+### Transaction Diagram
+
+```mermaid
+flowchart LR
+  TX[(Swap TX)]
+
+  subgraph Inputs
+    direction LR
+    i0["input 0<br/>• A: 1<br/>(Gated by Contract)"]
+    i1["input 1<br/>• B: 1"]
+  end
+
+  subgraph Outputs
+    direction LR
+    o0["output 0<br/>• A: 1<br/>(To Taker)"]
+    o1["output 1<br/>• B: 1<br/>(To Original Owner)"]
+  end
+
+  i0 --> TX
+  i1 --> TX
+  TX --> o0
+  TX --> o1
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0,i1 in;
+  class o0,o1 out;
+  class TX tx;
+```
+
+---
+
+## 2) Multi-Sig Asset Vault
+
+This contract demonstrates a 2-of-2 multi-signature vault for an asset. To spend the asset held by this contract, two valid signatures must be provided corresponding to the two public keys defined in the script.
+
+### Contract Logic
+
+1.  **Define Public Keys:** The script starts by pushing two public keys onto the stack.
+2.  **Check Signatures:** It then uses `OP_CHECKSIG` twice to validate the provided signatures against the public keys. `OP_SWAP` is used to reorder the stack for the second signature check.
+3.  **Verify:** Both checks must pass for the transaction to be valid.
+
+### Arkade Script Opcodes
+
+```
+// PubKey1 Sig1
+OP_PUSHBYTES_33 <pubkey1>
+OP_CHECKSIG
+OP_VERIFY
+
+// PubKey2 Sig2
+OP_PUSHBYTES_33 <pubkey2>
+OP_CHECKSIG
+OP_VERIFY
+```
+
+### Transaction Diagram
+
+```mermaid
+flowchart LR
+  TX[(Withdraw TX)]
+
+  subgraph Inputs
+    i0["input 0<br/>• Vaulted Asset: 100<br/>(2-of-2 Multi-sig)"]
+  end
+
+  subgraph Signatures
+    sig1["Signature from Key 1"]
+    sig2["Signature from Key 2"]
+  end
+
+  subgraph Outputs
+    o0["output 0<br/>• Vaulted Asset: 100<br/>(To new destination)"]
+  end
+
+  i0 --> TX
+  sig1 --> TX
+  sig2 --> TX
+  TX --> o0
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0 in;
+  class o0 out;
+  class sig1,sig2 in;
+  class TX tx;
+```
+
+---
+
+## 3) Synthetic Asset Covenant
+
+This advanced contract creates a synthetic asset (`SynthUSD`) that is pegged to another asset (`BaseAsset`). The contract ensures that new `SynthUSD` can only be issued if a corresponding amount of `BaseAsset` is locked in the same transaction. Conversely, `SynthUSD` can be burned to unlock the `BaseAsset`.
+
+### Contract Logic
+
+The script uses introspection opcodes to check the asset balances for both the synthetic and base assets across inputs and outputs.
+
+1.  **Get Deltas:** It calculates the change in balance (delta) for both `SynthUSD` and `BaseAsset`.
+2.  **Enforce Peg:** It verifies that `delta(SynthUSD) + delta(BaseAsset) == 0`. This means that for every unit of `SynthUSD` created, one unit of `BaseAsset` must be deposited, and for every unit of `SynthUSD` burned, one unit of `BaseAsset` is returned.
+
+### Arkade Script Opcodes
+
+```
+// Get delta for SynthUSD (assuming it's the asset on the output)
+OP_GETASSET_GROUP_DELTAS
+OP_PUSHINT_0 // group index of SynthUSD
+OP_NTH
+
+// Get delta for BaseAsset
+OP_PUSHBYTES_32 <base_asset_txid>
+OP_PUSHBYTES_1 <base_asset_gidx>
+OP_ASSETID
+OP_GETASSET_GROUP_DELTAS
+OP_PUSHINT_1 // group index of BaseAsset
+OP_NTH
+
+// Verify peg: delta(SynthUSD) + delta(BaseAsset) == 0
+OP_ADD
+OP_PUSHINT_0
+OP_EQUAL
+OP_VERIFY
+```
+
+### Transaction Diagram (Issuance)
+
+```mermaid
+flowchart LR
+  TX[(Issuance TX)]
+
+  subgraph Inputs
+    i0["input 0<br/>• BaseAsset: 100"]
+  end
+
+  subgraph Outputs
+    o0["output 0<br/>• BaseAsset: 100<br/>(Locked in contract)"]
+    o1["output 1<br/>• SynthUSD: 100<br/>(Newly issued)"]
+  end
+
+  i0 --> TX
+  TX --> o0
+  TX --> o1
+
+  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
+  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
+  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
+  class i0 in;
+  class o0,o1 out;
+  class TX tx;
+```

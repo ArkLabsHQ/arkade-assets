@@ -11,23 +11,30 @@ function testCodec() {
 
   const originalPacket: Packet = {
     groups: [
+      // Genesis Group: Fresh asset with issuance terms
       {
-        assetId: { txidHex: 'a'.repeat(64), gidx: 1 },
-        control: { txidHex: 'b'.repeat(64), gidx: 2 },
-        metadata: { 'key': 'value' },
+        issuance: {
+          controlAsset: { txidHex: 'b'.repeat(64), gidx: 2 },
+          metadata: { 'name': 'TestCoin', 'ticker': 'TSC' },
+          immutable: true,
+        },
         inputs: [
-          { type: 'LOCAL', i: 0, amt: 100n },
-          { type: 'TELEPORT', commitment: 'c'.repeat(64), amt: 200n },
+          { type: 'LOCAL', i: 0, amt: 1000n },
         ],
         outputs: [
-          { type: 'LOCAL', o: 1, amt: 50n },
-          { type: 'TELEPORT', commitment: 'd'.repeat(64), amt: 250n },
+          { type: 'LOCAL', o: 0, amt: 1000n },
         ],
       },
+      // Update Group: Existing asset with a metadata update
       {
         assetId: { txidHex: 'e'.repeat(64), gidx: 3 },
-        inputs: [],
-        outputs: [],
+        metadata: { 'owner': 'new_owner' },
+        inputs: [
+          { type: 'LOCAL', i: 1, amt: 1n },
+        ],
+        outputs: [
+          { type: 'LOCAL', o: 1, amt: 1n },
+        ],
       },
     ],
   };

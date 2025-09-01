@@ -9,19 +9,24 @@ interface TxVout {
   scriptPubKey: string;
 }
 
-interface Tx {
+export interface Tx {
   txid: string;
   vin: any[]; // Simplified for this tool
   vout: TxVout[];
 }
 
 
-export function buildTxFromPayload(payload: Packet, txidHex: string): Tx {
+export function buildTxFromPayload(payload: Packet, txidHex: string, vins: any[] = []): Tx {
   const script = buildOpReturnScript(payload);
   const scriptHex = bufToHex(script);
   // Determine number of asset outputs to create placeholder vouts
-  const numAssetOutputs = payload.groups?.reduce((acc, g) => 
-    acc + (g.outputs?.filter(o => o.type === 'LOCAL').length || 0), 0) || 0;
+  const maxVoutIndex = payload.groups?.reduce((maxIdx, g) => {
+    const groupMax = g.outputs
+      ?.filter(o => o.type === 'LOCAL')
+      .reduce((maxO, out) => Math.max(maxO, out.o), -1) ?? -1;
+    return Math.max(maxIdx, groupMax);
+  }, -1) ?? -1;
+  const numAssetOutputs = maxVoutIndex + 1;
   
   const vout: TxVout[] = [];
   for (let i = 0; i < numAssetOutputs; i++) {
@@ -31,7 +36,7 @@ export function buildTxFromPayload(payload: Packet, txidHex: string): Tx {
 
   return {
     txid: txidHex,
-    vin: [],
+    vin: vins,
     vout,
   };
 }

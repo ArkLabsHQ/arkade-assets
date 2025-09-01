@@ -15,14 +15,22 @@ interface Tx {
 }
 
 export function exampleA(txidHex: string): Tx {
-  // Example A (revised): fresh issuance with control present (Δ arbitrary; example shows Δ=0 and pre-existing control)
-  const controlTxidHex = '11'.repeat(32); // placeholder previous control txid
+  // Example A (revised): fresh issuance with a pre-existing control asset.
+  const controlTxidHex = '11'.repeat(32);
   const controlGidx = 0;
   const groups: Packet['groups'] = [
-    // Group[0] Control: control present (Δ arbitrary; here Δ=0, input vin[0] -> output 0); references pre-existing assetId
+    // Group[0] Control: A pre-existing control asset, spent and re-created.
     { assetId: { txidHex: controlTxidHex, gidx: controlGidx }, inputs: [{ type: 'LOCAL' as const, i: 0, amt: 1n }], outputs: [{ type: 'LOCAL' as const, o: 0, amt: 1n }] },
-    // Group[1] Token: fresh, controlled by group 0, outputs 1:500, 2:500
-    { control: { gidx: 0 }, inputs: [], outputs: [{ type: 'LOCAL' as const, o: 1, amt: 500n }, { type: 'LOCAL' as const, o: 2, amt: 500n }] },
+    // Group[1] Token: A fresh issuance, controlled by group 0.
+    {
+      issuance: {
+        controlAsset: { gidx: 0 },
+        metadata: { name: 'Token A' },
+        immutable: false,
+      },
+      inputs: [],
+      outputs: [{ type: 'LOCAL' as const, o: 1, amt: 500n }, { type: 'LOCAL' as const, o: 2, amt: 500n }]
+    },
   ];
   const script = buildOpReturnScript({ groups });
   const scriptHex = bufToHex(script);
@@ -46,7 +54,15 @@ export function exampleC(txidHex: string): Tx {
     // Group[0] Control: fresh, outputs to vout 0 (Δ>0)
     { inputs: [], outputs: [{ type: 'LOCAL' as const, o: 0, amt: 1n }] },
     // Group[1] Token: fresh, controlled by group 0, outputs to vout 1 (Δ>0)
-    { control: { gidx: 0 }, inputs: [], outputs: [{ type: 'LOCAL' as const, o: 1, amt: 1000n }] },
+    {
+      issuance: {
+        controlAsset: { gidx: 0 },
+        metadata: { name: 'Token C' },
+        immutable: false,
+      },
+      inputs: [],
+      outputs: [{ type: 'LOCAL' as const, o: 1, amt: 1000n }]
+    },
   ];
   const script = buildOpReturnScript({ groups });
   const scriptHex = bufToHex(script);
@@ -122,8 +138,11 @@ export function exampleD_reveal(revealTxidHex: string, commitTx: Tx): Tx {
   const groups: Packet['groups'] = [
     // Group 0: New Kitty (freshly minted, controlled by species control)
     {
-      control: { txidHex: speciesControlId.txidHex, gidx: speciesControlId.gidx },
-      metadata: newKittyMetadata,
+      issuance: {
+        controlAsset: { txidHex: speciesControlId.txidHex, gidx: speciesControlId.gidx },
+        metadata: newKittyMetadata,
+        immutable: true,
+      },
       inputs: [],
       outputs: [{ type: 'LOCAL', o: 0, amt: 1n }]
     }
@@ -145,6 +164,45 @@ export function exampleD_reveal(revealTxidHex: string, commitTx: Tx): Tx {
   };
 }
 
+export function exampleE_metadata_update(txidHex: string): Tx {
+  // Example E: metadata update for an existing asset.
+  // Spends the control asset and the token, and re-creates both with updated metadata for the token.
+  const controlAssetId = { txidHex: 'cc'.repeat(32), gidx: 0 };
+  const tokenId = { txidHex: 'dd'.repeat(32), gidx: 1 };
+
+  const groups: Packet['groups'] = [
+    // Group 0: Control asset (retained, Δ=0)
+    {
+      assetId: controlAssetId,
+      inputs: [{ type: 'LOCAL', i: 0, amt: 1n }],
+      outputs: [{ type: 'LOCAL', o: 0, amt: 1n }]
+    },
+    // Group 1: Token with updated metadata
+    {
+      assetId: tokenId,
+      metadata: { 'description': 'This token has new and improved metadata!' },
+      inputs: [{ type: 'LOCAL', i: 1, amt: 1000n }],
+      outputs: [{ type: 'LOCAL', o: 1, amt: 1000n }]
+    }
+  ];
+
+  const script = buildOpReturnScript({ groups });
+  const scriptHex = bufToHex(script);
+
+  return {
+    txid: txidHex,
+    vin: [
+      { txid: controlAssetId.txidHex, vout: 0 }, // Spends control UTXO
+      { txid: tokenId.txidHex, vout: 1 },      // Spends token UTXO
+    ],
+    vout: [
+      { n: 0, scriptPubKey: '51' }, // Control re-output
+      { n: 1, scriptPubKey: '51' }, // Token re-output
+      { n: 2, scriptPubKey: scriptHex }, // OP_RETURN
+    ],
+  };
+}
+
 export function exampleB(txidHex: string): Tx {
   // Example B: token with metadata, control present (Δ arbitrary; example shows Δ=0 with pre-existing control)
   const controlTxidHex = '22'.repeat(32); // placeholder previous control txid
@@ -156,11 +214,14 @@ export function exampleB(txidHex: string): Tx {
       outputs: [{ type: 'LOCAL' as const, o: 0, amt: 1n }]
     },
     {
-      control: { gidx: 0 },
-      metadata: {
-        name: "My Test Token",
-        ticker: "MTT",
-        decimals: "8"
+      issuance: {
+        controlAsset: { gidx: 0 },
+        metadata: {
+          name: "My Test Token",
+          ticker: "MTT",
+          decimals: "8"
+        },
+        immutable: false,
       },
       inputs: [],
       outputs: [{ type: 'LOCAL' as const, o: 1, amt: 1000n }]

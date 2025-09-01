@@ -268,7 +268,7 @@ export class Indexer {
     const eff: EffectiveGroup[] = groups.map((g, gidx) => ({
       idx: gidx,
       assetId: g.assetId ? { txidHex: g.assetId.txidHex, gidx: g.assetId.gidx } : { txidHex: tx.txid, gidx },
-      controlRef: g.control || null,
+      controlRef: g.issuance?.controlAsset || null,
       inputs: g.inputs || [],
       outputs: g.outputs || [],
     }));
@@ -406,20 +406,20 @@ export class Indexer {
     eff.forEach((g) => {
       const assetKey = Indexer.assetKey(g.assetId.txidHex, g.assetId.gidx);
       const groupData = groups[g.idx];
-      if (!state.assets[assetKey] && g.assetId.txidHex === tx.txid) { // Genesis
-        const resolved = resolveAssetRef(g.controlRef);
-        const controlKey = resolved ? Indexer.assetKey(resolved.txidHex, resolved.gidx) : null;
-        state.assets[assetKey] = { control: controlKey, metadata: groupData.metadata || {} };
-      } else if (state.assets[assetKey] && groupData.metadata) { // Metadata Update
-        const def = state.assets[assetKey];
-        if (!def.control) throw new Error(`Metadata update for uncontrolled asset ${assetKey}`);
-        const controlUtxoKey = Object.keys(state.utxos).find(k => state.utxos[k][def.control!]);
-        if (!controlUtxoKey) throw new Error(`Control asset ${def.control} not found for ${assetKey}`);
-        const [controlTxid, controlVoutStr] = controlUtxoKey.split(':');
-        if (!tx.vin.some(i => i.txid === controlTxid && i.vout === parseInt(controlVoutStr))) {
-          throw new Error(`Tx does not spend control UTXO ${controlUtxoKey} for ${assetKey}`);
+      const isFresh = !state.assets[assetKey] && g.assetId.txidHex === tx.txid;
+
+      if (isFresh) { // Genesis
+        const issuance = groupData.issuance;
+        if (issuance) {
+          const resolved = resolveAssetRef(issuance.controlAsset || null);
+          const controlKey = resolved ? Indexer.assetKey(resolved.txidHex, resolved.gidx) : null;
+          state.assets[assetKey] = { control: controlKey, metadata: issuance.metadata || {} };
+        } else {
+          state.assets[assetKey] = { control: null, metadata: {} };
         }
-        def.metadata = groupData.metadata;
+      } else if (groupData.metadata) { // Metadata Update
+        requireControlPresent(assetKey);
+        state.assets[assetKey].metadata = groupData.metadata;
       }
     });
 

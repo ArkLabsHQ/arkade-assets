@@ -64,26 +64,46 @@ Packet := {
 ```
 Group := {
   AssetId?      : AssetId          # absent => fresh asset (AssetId* = (this_txid, group_index))
-  ControlAsset? : AssetRef         # absent if no control required
-  Metadata?     : map<string, string> # optional, only for genesis. key-value store.
+  Issuance?     : Issuance         # Genesis only: Defines issuance policy and initial metadata.
+  Metadata?     : map<string, string> # Update only: The new metadata for an existing asset.
   InputCount    : varuint
   Inputs[InputCount]  : AssetInput
   OutputCount   : varuint
   Outputs[OutputCount] : AssetOutput
 }
+
+Issuance := {
+  ControlAsset? : AssetRef
+  Metadata?     : map<string, string>
+  Immutable?    : bool             # If true, metadata cannot be changed after genesis.
+}
 ```
 
-### 3.1. Encoding Details
+### 3.1. Issuance and Metadata Rules
+
+- **Genesis (Fresh Assets)**: The `Issuance` property is **only allowed** when creating a fresh asset (i.e., when `AssetId` is absent). It defines the initial control policy and metadata.
+  - If `Issuance.Immutable` is set to `true`, the asset's metadata can never be changed.
+  - The `Metadata` property **must not** be present at genesis.
+
+- **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
+  1. Include the asset's `ControlAsset` as an input to authorize the change.
+  2. Include the new `Metadata` property in the asset group, containing the full new metadata map.
+
+- **Mutual Exclusivity**: The `Issuance` and `Metadata` properties are mutually exclusive. An asset group **must not** contain both.
+
+- **Covenant Enforcement**: The validity of a metadata transition (e.g., ensuring only certain keys are changed) is enforced by covenant scripts, which can inspect the input and output metadata hashes.
+
+### 3.2. Encoding Details
 
 While the specification uses a logical TLV (Type-Length-Value) model, the canonical binary encoding employs specific optimizations for compactness.
 
 **Group Optional Fields: Presence Byte**
 
-Instead of using a type marker for each optional field within a `Group` (`AssetId`, `ControlAsset`, `Metadata`), the implementation uses a single **presence byte**. This byte is a bitfield that precedes the group's data, where each bit signals the presence of an optional field:
+Instead of using a type marker for each optional field within a `Group` (`AssetId`, `Issuance`), the implementation uses a single **presence byte**. This byte is a bitfield that precedes the group's data, where each bit signals the presence of an optional field:
 
 -   `bit 0 (0x01)`: `AssetId` is present.
--   `bit 1 (0x02)`: `ControlAsset` is present.
--   `bit 2 (0x04)`: `Metadata` is present.
+-   `bit 1 (0x02)`: `Issuance` is present (genesis only).
+-   `bit 2 (0x04)`: `Metadata` is present (update only).
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
 
@@ -189,422 +209,9 @@ When a teleport output is created, the indexer stores the source_txid, group ind
 
 ---
 
-## 6. Introspection opcodes
+## 6. Examples
 
-All Asset Ids are handled as **two stack items**: `(txid32, gidx_u16)`.
-
-### Basics
-
-- `OP_TXHASH` → *[out]* `txid32`\
-  *Pushes the txid of the current transaction.*
-
-### Groups
-
-- `OP_INSPECTNUMASSETGROUPS` → *[out]* `K`\
-  *Number of groups in the ArkAssetV1 packet.*
-- `OP_INSPECTASSETGROUPASSETID k` → *[out]* `assetid_txid32  assetid_gidx_u16`\
-  *Resolved AssetId of group **``**. Fresh groups use **``**.*
-- `OP_INSPECTASSETGROUPCTRL k` → *[out]* `ctrl_txid32  ctrl_gidx_u16 | OP_0`\
-  *Control AssetId if present, else OP\_0.*
-- `OP_FINDASSETGROUPBYASSETID assetid_txid32 assetid_gidx_u16` → *[out]* `k | OP_0`\
-  *Find group index for a given AssetId, or OP\_0 if absent.*
-
-### Per-group I/O
-- `OP_INSPECTASSETGROUPMETADATAHASH k source_u8` → *[out]* `metadata_hash_bytes32`\
-  *Pushes the metadata hash (Merkle root) of group **k**. `source_u8` determines the source: `0` for the existing metadata (from inputs), `1` for the new metadata (from outputs), and `2` to push both (existing then new).*
-- `OP_INSPECTASSETGROUPNUM k source_u8` → *[out]* `count_u16` or `count_in_u16 count_out_u16`\
-  *Pushes the number of inputs/outputs for group **k**. `source_u8`: `0` for inputs, `1` for outputs, `2` for both (in, then out).*
-- `OP_INSPECTASSETGROUP k j source_u8` → *[out]* `type_u8  data...  amount_u64`\
-  *Retrieve the j-th input/output of group **k**. `source_u8`: `0` for input, `1` for output.*
-- `OP_INSPECTASSETGROUPSUM k source_u8` → *[out]* `sum_u64` or `sum_in_u64 sum_out_u64`\
-  *Pushes the sum of input/output amounts for group **k**. `source_u8`: `0` for inputs, `1` for outputs, `2` for both (in, then out).*
-  *Sum of all output amounts for group k.*
-- `OP_INSPECTASSETGROUPDELTA  k` → *[out]* `delta_i64` (Σout − Σin)\
-  *Net change for group k. >0 issuance, 0 transfer, <0 burn.*
-
-### Cross-output (multi-asset per UTXO)
-
-- `OP_INSPECTOUTASSETCOUNT o` → *[out]* `n`\
-  *Number of asset entries assigned to output o.*
-- `OP_INSPECTOUTASSETAT o t` → *[out]* `assetid_txid32  assetid_gidx_u16  amount_u64`\
-  *t-th asset and amount assigned to output o.*
-- `OP_INSPECTOUTASSETLOOKUP o assetid_txid32 assetid_gidx_u16` → *[out]* `amount_u64 | OP_0`\
-  *Declared amount for given asset at output o, or OP\_0 if none.*
-
-### Cross-input (packet-declared)
-
-- `OP_INSPECTINASSETCOUNT i` → *[out]* `n`\
-  *Number of assets declared for input i.*
-- `OP_INSPECTINASSETAT i t` → *[out]* `assetid_txid32  assetid_gidx_u16  amount_u64`\
-  *t-th asset and amount declared for input i.*
-- `OP_INSPECTINASSETLOOKUP i assetid_txid32 assetid_gidx_u16` → *[out]* `amount_u64 | OP_0`\
-  *Declared amount for given asset at input i, or OP\_0 if none.*
-
-### Teleport-specific
-
-- `OP_INSPECTGROUPTELEPORTOUTCOUNT k` → *[out]* `n`\
-  *Number of TELEPORT outputs in group k.*
-- `OP_INSPECTGROUPTELEPORTOUT k j` → *[out]* `txid_32  vout_u32  amount_u64`\
-  *j-th TELEPORT output in group k (target txid, vout, amount).*
-- `OP_INSPECTGROUPTELEPORTINCOUNT k` → *[out]* `n`\
-  *Number of TELEPORT inputs in group k.*
-- `OP_INSPECTGROUPTELEPORTIN k j` → *[out]* `txid_32  vout_u32  amount_u64`\
-  *j-th TELEPORT input in group k (source txid, vout, amount).*
-
----
-
-## 6. Examples of transactions
-
-### A) Fresh issuance with control C present (C pre‑exists)
-
-```
-Group[0] (C): AssetId=(txidC,gidxC)
-              CTRL absent
-              I: (i0,1)
-              O: (o0,1)               # present (Δ shown as 0 here, but not required)
-
-Group[1] (A): AssetId absent → (this_txid,1)
-              CTRL=BY_ID{ assetid:{txidC,gidxC} }
-              O: (o1,500), (o2,500)   # Δ>0 → fresh issuance
-```
-
-Diagram:
-
-```mermaid
-flowchart LR
-  TX[(this_txid)]
-  i0["input index 0<br/>• C: 1"] --> TX
-  TX --> o0["output index 0<br/>• C: 1"]
-  TX --> o1["output index 1<br/>• A: 500"]
-  TX --> o2["output index 2<br/>• A: 500"]
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0 in;
-  class TX tx;
-  class o0,o1,o2 out;
-```
-
-**Checks:**
-
-- Group 1 (A): Δ>0 and fresh.
-- Group 0 (C): C is present (Δ arbitrary).
-- Group 1: CTRL=BY_ID points to C; issuance valid since control is present in the same tx.
-
----
-
-### B) Transfer
-
-```
-  Group (LOL): AssetId=(txidL,gidxL)
-              I: (i0,100),(i1,40)
-              O: (o0,70),(o1,70)
-```
-
-Diagram:
-
-```mermaid
-flowchart LR
-  TX[(TX)]
-  i0["input index 0<br/>• LOL: 100"] --> TX
-  i1["input index 1<br/>• LOL: 40"] --> TX
-  TX --> o0["output index 0<br/>• LOL: 70"]
-  TX --> o1["output index 1<br/>• LOL: 70"]
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0,i1 in;
-  class o0,o1 out;
-  class TX tx;
-```
-
-Δ=0 → valid transfer.
-
----
-
-### C) Burn
-
-```
-  Group (XYZ): AssetId=(txidX,gidxX)
-               I: (i0,30),(i1,10)
-               O: []
-```
-
-Diagram:
-
-```mermaid
-flowchart LR
-  TX[(TX)]
-  i0["input index 0<br/>• XYZ: 30"] --> TX
-  i1["input index 1<br/>• XYZ: 10"] --> TX
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0,i1 in;
-  class TX tx;
-```
-
-Δ<0 → burn.
-
----
-
-### D) Reissuance with control present
-
-```
-  Group (A): Δ>0, CTRL=(txidC,gidxC)
-  Group (C): present (Δ arbitrary)
-```
-
-Diagram:
-
-```mermaid
-flowchart LR
-  TX[(TX)]
-  i0["input index 0<br/>• C: 100"] --> TX
-  i1["input index 1<br/>• A: 200"] --> TX
-  TX --> o0["output index 0<br/>• C: 100"]
-  TX --> o1["output index 1<br/>• A: 230"]
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0,i1 in;
-  class o0,o1 out;
-  class TX tx;
-```
-
-Policy: issuance valid since control is present.
-
----
-
-### E) Multi-asset per UTXO
-
-```
-  Group S1: AssetId=(txidS1,gidxS1), O:(o0,70)
-  Group S2: AssetId=(txidS2,gidxS2), O:(o0,70)
-```
-
-Diagram:
-
-```mermaid
-flowchart LR
-  TX[(TX)]
-  TX --> o0["output index 0<br/>• S1: 70<br/>• S2: 70"]
-
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class TX tx;
-  class o0 out;
-```
-
-Output 0 now carries two assets.
-
----
-
-### F) Multi-party CoinJoin
-
-**Goal:** Multiple parties atomically swap/reshuffle assets while preserving per‑asset conservation (`Δ=0` for every group) and hiding linkage between inputs and outputs.
-
-**Participants (example):**
-
-- Alice inputs 150 LOL
-- Bob inputs 150 LOL
-- Carol inputs 60 XYZ
-- Dave inputs 60 XYZ
-
-**Packet (two groups, equalized outputs):**
-
-```
-Group[0]  # LOL (assetid = (txidLOL, gidxLOL))
-  AssetId : {txidLOL, gidxLOL}
-  I=4 : (i0, 100), (i1, 50), (i2, 80), (i3, 70)      # from Alice+Bob
-  O=4 : (o0, 75),  (o1, 75),  (o2, 75),  (o3, 75)    # four equal-sized LOL outputs
-  # Σin=300, Σout=300 → Δ=0
-
-Group[1]  # XYZ (assetid = (txidXYZ, gidxXYZ))
-  AssetId : {txidXYZ, gidxXYZ}
-  I=2 : (i4, 30), (i5, 30)                           # from Carol+Dave
-  O=2 : (o4, 30), (o5, 30)                           # equal-sized XYZ outputs
-  # Σin=60, Σout=60 → Δ=0
-```
-
-Diagram:
-
-```mermaid
-flowchart LR
-  TX[(TX)]
-  i0["input index 0<br/>• LOL: 100"] --> TX
-  i1["input index 1<br/>• LOL: 50"] --> TX
-  i2["input index 2<br/>• LOL: 80"] --> TX
-  i3["input index 3<br/>• LOL: 70"] --> TX
-  i4["input index 4<br/>• XYZ: 30"] --> TX
-  i5["input index 5<br/>• XYZ: 30"] --> TX
-  TX --> o0["output index 0<br/>• LOL: 75"]
-  TX --> o1["output index 1<br/>• LOL: 75"]
-  TX --> o2["output index 2<br/>• LOL: 75"]
-  TX --> o3["output index 3<br/>• LOL: 75"]
-  TX --> o4["output index 4<br/>• XYZ: 30"]
-  TX --> o5["output index 5<br/>• XYZ: 30"]
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0,i1,i2,i3,i4,i5 in;
-  class o0,o1,o2,o3,o4,o5 out;
-  class TX tx;
-```
-
-**Properties:**
-
-- Every group preserves supply (`Δ=0`), so no control tokens are required.
-- Using **equalized output amounts** per asset thwarts simple amount-based linkage.
-- Outputs can be any scriptPubKey (P2TR to new keys recommended). If covenant recursion is desired, require outputs use the covenant P2TR template.
-- Multi‑asset per UTXO is allowed: parties MAY consolidate multiple assets into a single `outIndex` to reduce UTXO count.
-
-
-### G) Hierarchical control
-
-Control assets can be chained. Example hierarchy:
-
-- S: top-level control asset
-- C: control asset controlled by S
-- A: asset controlled by C
-
-Graph: S → C → A
-
-Rules:
-
-- To reissue A (Δ>0 in group A), C must be present in the same transaction.
-- To reissue C (Δ>0 in group C), S must be present in the same transaction.
-
-Example packet layout:
-
-```
-Group[0] (S): AssetId=(txidS,gidxS)                          # top-level control
-              I/O balance: Δ arbitrary (example shows Δ=0)   # present
-
-Group[1] (C): AssetId=(txidC,gidxC), CTRL=BY_ID{ assetid:{txidS,gidxS} }
-              I/O balance: Δ arbitrary                       # if reissuing C (Δ>0), S must be present
-
-Group[2] (A): AssetId=(txidA,gidxA), CTRL=BY_ID{ assetid:{txidC,gidxC} }
-              I/O balance: Δ>0                               # reissuing A; requires C present
-```
-
-If only A is reissued, C must be present but S is not required unless C itself is being reissued.
-
----
-
-### H) Teleport Transfer Examples
-
-#### Basic Teleport Transfer
-
-**Step 1: Source Transaction (Alice teleports 100 LOL to Bob)**
-
-```mermaid
-graph LR
-  i0["input index 0<br/>• LOL: 150"] --> TX1["TX1<br/>ArkAssetV1 Packet<br/>(teleport: 100 LOL)"]
-  TX1 --> o0["output index 0<br/>• LOL: 50 (change)"]
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0 in;
-  class o0 out;
-  class TX1 tx;
-```
-
-**ArkAssetV1 Packet:**
-```
-Group[0]: AssetId=(LOL_txid, 0)
-  Inputs:  [LOCAL{i:0, amt:150}]
-  Outputs: [LOCAL{o:0, amt:50}, TELEPORT{commitment:0xABC123..., amt:100}]
-```
-
-**Commitment Generation:**
-```
-commitment = sha256(
-  payment_script: Bob's_P2TR_scriptPubKey,
-  nonce: random_32_bytes
-)
-```
-
-**Step 2: Target Transaction (Bob claims 100 LOL)**
-
-```mermaid
-graph LR
-  i0["input index 0<br/>• XYZ: 50"] --> TX2["TX2<br/>ArkAssetV1 Packet<br/>(claims teleport)"]
-  TX2 --> o0["output index 0<br/>• LOL: 100<br/>(Bob's P2TR)"]
-  TX2 --> o1["output index 1<br/>• XYZ: 50"]
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-  class i0 in;
-  class o0,o1 out;
-  class TX2 tx;
-```
-
-**ArkAssetV1 Packet:**
-```
-Group[0]: AssetId=(LOL_txid, 0)
-  Inputs:  [TELEPORT{commitment:0xABC123..., amt:100}]
-  Outputs: [LOCAL{o:0, amt:100}]  # Must go to output 0 which has Bob's P2TR
-
-Group[1]: AssetId=(XYZ_txid, 0)
-  Inputs:  [LOCAL{i:0, amt:50}]
-  Outputs: [LOCAL{o:1, amt:50}]
-```
-
-**Witness Data for Teleport Claim:**
-```
-TeleportProof {
-  payment_script: Bob's_P2TR_scriptPubKey,
-  nonce: same_nonce_from_step1
-}
-```
-
-**Key Points:**
-- Output 0 MUST have Bob's P2TR scriptPubKey that was committed to
-- The LOL assets from the teleport MUST be assigned to output 0
-- The indexer verifies both: `sha256(scriptPubKey || nonce) == commitment` AND assets flow to the correct output
-- Bob can use any script type (P2TR, P2WSH, etc.) as long as it matches
-
-#### Arkade Batch Swap with Teleports
-
-**Scenario:** Alice and Bob perform atomic swap via Arkade operator using teleports.
-
-```mermaid
-{{ ... }}
-graph LR
-  subgraph "Alice's TX"
-    ai0["input<br/>• LOL: 100"] --> ATX["Alice TX"]
-    ATX --> ao0["teleport out<br/>commitment_A"]
-  end
-  
-  subgraph "Arkade Batch TX"
-    bi0["teleport in<br/>commitment_A"] --> BTX["Batch TX"]
-    bi1["teleport in<br/>commitment_B"] --> BTX
-    BTX --> bo0["teleport out<br/>commitment_C"]
-    BTX --> bo1["teleport out<br/>commitment_D"]
-  end
-  
-  subgraph "Bob's TX"
-    ci0["input<br/>• XYZ: 50"] --> CTX["Bob TX"]
-    CTX --> co0["teleport out<br/>commitment_B"]
-  end
-
-  classDef in fill:#f0f9ff,stroke:#0369a1,stroke-width:1px;
-  classDef out fill:#f7fee7,stroke:#15803d,stroke-width:1px;
-  classDef tx fill:#fff7ed,stroke:#9a3412,stroke-width:1px;
-```
-
-**Commitment Relationships:**
-- `commitment_A`: Alice → Arkade (100 LOL)
-- `commitment_B`: Bob → Arkade (50 XYZ)
-- `commitment_C`: Arkade → Alice (50 XYZ)
-- `commitment_D`: Arkade → Bob (100 LOL)
+For detailed transaction examples, including diagrams, packet definitions, and code, please see [examples.md](./examples.md).
 
 ---
 

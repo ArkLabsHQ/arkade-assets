@@ -101,10 +101,16 @@ export interface AssetOutputTeleport {
 
 export type AssetOutput = AssetOutputLocal | AssetOutputTeleport;
 
+export interface Issuance {
+  controlAsset?: AssetRef;
+  metadata?: MetadataMap;
+  immutable?: boolean;
+}
+
 export interface Group {
   assetId?: AssetId;
-  control?: AssetRef;
-  metadata?: MetadataMap;
+  issuance?: Issuance;      // Genesis only
+  metadata?: MetadataMap;     // Update only
   inputs: AssetInput[];
   outputs: AssetOutput[];
 }
@@ -347,16 +353,28 @@ function encodeAssetOutput(output: AssetOutput): Uint8Array {
   throw new Error(`Unknown output type: ${(output as any).type}`);
 }
 
+export function encodeIssuance(issuance: Issuance): Uint8Array {
+  const byteList: Uint8Array[] = [];
+  let presence = 0;
+  if (issuance.controlAsset) presence |= 1;
+  if (issuance.metadata) presence |= 2;
+  if (issuance.immutable) presence |= 4;
+  byteList.push(new Uint8Array([presence]));
+  if (issuance.controlAsset) byteList.push(encodeAssetRef(issuance.controlAsset));
+  if (issuance.metadata) byteList.push(encodeMetadataMap(issuance.metadata));
+  return concatBytes(...byteList);
+}
+
 export function encodeGroup(group: Group): Uint8Array {
   const byteList: Uint8Array[] = [];
   if (Config.usePresenceByte) {
     let presence = 0;
     if (group.assetId) presence |= 1;
-    if (group.control) presence |= 2;
+    if (group.issuance) presence |= 2;
     if (group.metadata) presence |= 4;
     byteList.push(new Uint8Array([presence]));
     if (group.assetId) byteList.push(encodeAssetId(group.assetId));
-    if (group.control) byteList.push(encodeAssetRef(group.control));
+    if (group.issuance) byteList.push(encodeIssuance(group.issuance));
     if (group.metadata) byteList.push(encodeMetadataMap(group.metadata));
   } else {
     throw new Error('Implement your canonical TLV tagging here.');
@@ -482,33 +500,35 @@ function decodeAssetOutput(buf: Uint8Array, off: number): { output: AssetOutput;
   throw new Error(`Unknown output type: ${outputType}`);
 }
 
+export function decodeIssuance(buf: Uint8Array, off: number): { issuance: Issuance; next: number } {
+    if (off >= buf.length) throw new Error('decodeIssuance OOB');
+    let cursor = off;
+    const presence = buf[cursor++];
+    const issuance: Issuance = {};
+    if (presence & 1) { const r = decodeAssetRef(buf, cursor); issuance.controlAsset = r.ref; cursor = r.next; }
+    if (presence & 2) { const r = decodeMetadataMap(buf, cursor); issuance.metadata = r.map; cursor = r.next; }
+    if (presence & 4) { issuance.immutable = true; }
+    return { issuance, next: cursor };
+}
+
 export function decodeGroup(buf: Uint8Array, off: number): { group: Group; next: number } {
   if (!Config.usePresenceByte) throw new Error('Implement TLV tagging decode.');
   if (off >= buf.length) throw new Error('decodeGroup OOB');
   let cursor = off;
   const presence = buf[cursor++];
-  let assetId: AssetId | undefined = undefined;
-  let control: AssetRef | undefined = undefined;
-  let metadata: MetadataMap | undefined = undefined;
-  if (presence & 1) { const r = decodeAssetId(buf, cursor); assetId = r.assetid; cursor = r.next; }
-  if (presence & 2) { const r = decodeAssetRef(buf, cursor); control = r.ref; cursor = r.next; }
-  if (presence & 4) { const r = decodeMetadataMap(buf, cursor); metadata = r.map; cursor = r.next; }
+  const group: Group = { inputs: [], outputs: [] };
+  if (presence & 1) { const r = decodeAssetId(buf, cursor); group.assetId = r.assetid; cursor = r.next; }
+  if (presence & 2) { const r = decodeIssuance(buf, cursor); group.issuance = r.issuance; cursor = r.next; }
+  if (presence & 4) { const r = decodeMetadataMap(buf, cursor); group.metadata = r.map; cursor = r.next; }
 
   const vin = decodeVarUint(buf, cursor);
   cursor += vin.size;
-  const inputs: AssetInput[] = [];
-  for (let k = 0; k < vin.value; k++) { const r = decodeAssetInput(buf, cursor); inputs.push(r.input); cursor = r.next; }
+  for (let k = 0; k < vin.value; k++) { const r = decodeAssetInput(buf, cursor); group.inputs.push(r.input); cursor = r.next; }
 
   const vout = decodeVarUint(buf, cursor);
   cursor += vout.size;
-  const outputs: AssetOutput[] = [];
-  for (let k = 0; k < vout.value; k++) { const r = decodeAssetOutput(buf, cursor); outputs.push(r.output); cursor = r.next; }
+  for (let k = 0; k < vout.value; k++) { const r = decodeAssetOutput(buf, cursor); group.outputs.push(r.output); cursor = r.next; }
 
-  // Construct group without undefined optional fields so deepStrictEqual matches
-  const group: Group = { inputs, outputs };
-  if (assetId) group.assetId = assetId;
-  if (control) group.control = control;
-  if (metadata) group.metadata = metadata;
   return { group, next: cursor };
 }
 
