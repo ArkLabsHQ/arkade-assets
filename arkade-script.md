@@ -8,7 +8,7 @@ All Asset Ids are handled as **two stack items**: `(txid32, gidx_u16)`.
 
 ### Basics
 
-- `OP_TXHASH` → *[out]* `txid32`\
+- `OP_TXID` → *[out]* `txid32`\
   *Pushes the txid of the current transaction.*
 
 ### Groups
@@ -68,7 +68,7 @@ Arkade Assets extend Arkade Script with asset-specific introspection, following 
 
 ```javascript
 // Transaction basics
-tx.txid;                               // maps to OP_TXHASH
+tx.txid;                               // maps to OP_TXID
 
 // Asset Group Introspection
 tx.assetGroups.length;                    // Number of asset groups -> maps to OP_INSPECTNUMASSETGROUPS
