@@ -22,7 +22,7 @@ for file in "${SOURCE_FILES[@]}"; do
         echo "Appending $file..."
         cat "$file" >> "$OUTPUT_FILE"
         # Add a page break (or just newlines) for better separation
-        echo -e "\n\n<div style=\"page-break-after: always;\"><\/div>\n\n" >> "$OUTPUT_FILE"
+        echo -e "\n\n<div style=\"page-break-after: always;\"></div>\n\n" >> "$OUTPUT_FILE"
     else
         echo "Warning: $file not found. Skipping."
     fi

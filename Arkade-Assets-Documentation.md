@@ -425,7 +425,7 @@ This mechanism ensures that Arkade Assets work seamlessly within Arkade's batch 
 ```
 
 
-<div style="page-break-after: always;"><\/div>
+<div style="page-break-after: always;"></div>
 
 
 # Arkade Script Opcodes
@@ -585,7 +585,7 @@ struct TeleportIn {
 For detailed contract examples, including diagrams, packet definitions, and code, please see [examples.md](./examples.md).
 
 
-<div style="page-break-after: always;"><\/div>
+<div style="page-break-after: always;"></div>
 
 
 # Arkade Asset Transaction Examples
@@ -1302,7 +1302,7 @@ flowchart LR
 ```
 
 
-<div style="page-break-after: always;"><\/div>
+<div style="page-break-after: always;"></div>
 
 
 # ArkadeKitties: A Trustless Collectible Game on Ark
@@ -1624,6 +1624,6 @@ To ensure fair and unpredictable breeding, we introduce entropy using a **commit
 This two-step process ensures that neither the user nor the oracle can unilaterally control the outcome, making the breeding process genuinely random and exciting.
 
 
-<div style="page-break-after: always;"><\/div>
+<div style="page-break-after: always;"></div>
 
 
