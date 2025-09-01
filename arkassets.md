@@ -14,13 +14,13 @@ Assets are projected onto Bitcoin transactions by embedding a well-defined data 
 
 This data packet contains a set of (ordered) Asset Groups, which define asset details along with indexes of transaction inputs and outputs that are caarying this asset and the amounts. The order is important for fresh asset mint operations.
 
-If an Asset group omits its Asset Id, it mints a **fresh asset** whose Asset Id in subsequent transactions .
+If an Asset group omits its Asset Id, it mints a **fresh asset** whose Asset Id in subsequent transactions is `(this_txid, group_index)`.
 
 If Asset Id is provided, the group operates on that existing asset.
 
-When a fresh asset is being created, it may refer to another asset as its control asset. Issuance is valid if that control asset is present in the same transaction. Retention (Δ=0) is not required. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
+When a fresh asset is being created, it may refer to another asset as its control asset. Issuance is valid if that control asset is present in the same transaction. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
 
-Control assets allow additional, future reissuance of a token, and are themselves assets. When a positive delta (Σout > Σin) is detected in an asset group that specifies a control asset, that control asset MUST appear in the same transaction. Retention (Δ=0) is not required. This requirement applies to both fresh issuance and reissuance. If an asset did not specify a control asset at genesis, it cannot be reissued.
+Control assets allow additional, future reissuance of a token, and are themselves assets. When a positive delta (Σout > Σin) is detected in an asset group that specifies a control asset, that control asset MUST appear in the same transaction. This requirement applies to both fresh issuance and reissuance. If an asset did not specify a control asset at genesis, it cannot be reissued.
 
 ArkAssetV1 supports projecting multiple assets unto a UTXO.\
 BTC amounts are orthogonal and not included in asset accounting.
