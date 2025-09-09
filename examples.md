@@ -2,7 +2,7 @@
 
 ---
 
-## A) Fresh Issuance with Pre-existing Control
+## A) Fresh Issuance with Pre-existing Control Asset
 
 This example demonstrates a fresh issuance of a new asset `A`, which is controlled by a pre-existing control asset `C`. The control asset `C` must be present in the same transaction for the issuance of `A` to be valid. The control asset must be present, but its input and output amounts do not need to match.
 
@@ -72,7 +72,7 @@ const payload: Packet = {
 
 ---
 
-## B) Simple Transfer
+## B) Asset Transfer
 
 This example shows a standard transfer of a single asset (`LOL`) from multiple inputs to multiple outputs. The key requirement for a valid transfer is that the total amount of the asset in the inputs equals the total amount in the outputs (i.e., Σinputs = Σoutputs).
 
@@ -122,52 +122,7 @@ const payload: Packet = {
 
 ---
 
-## C) Asset Burn
-
-This example demonstrates how to burn assets. A burn occurs when the sum of an asset's inputs is greater than the sum of its outputs (Σinputs > Σoutputs). In this case, two inputs containing the `XYZ` asset are spent, but no outputs are created for that asset group, resulting in the total amount being burned.
-
-### Transaction Diagram
-
-```mermaid
-flowchart LR
-  TX[(TX)]
-  i0["input index 0<br/>• XYZ: 30"] --> TX
-  i1["input index 1<br/>• XYZ: 10"] --> TX
-
-```
-
-### Asset Packet Definition
-
-- **Group[0] (Asset XYZ):**
-  - `AssetId`: `(txidX, gidxX)`
-  - `Inputs`: `(i:0, amt:30), (i:1, amt:10)`
-  - `Outputs`: `[]`
-  - *Result: Σin (40) > Σout (0). This is a valid burn.*
-
-### Code Example (TypeScript)
-
-```typescript
-import { Packet } from './arkade-assets-codec';
-
-const xyzAssetId = { txidHex: '88'.repeat(32), gidx: 0 }; // Placeholder
-
-const payload: Packet = {
-  groups: [
-    {
-      assetId: xyzAssetId,
-      inputs: [
-        { type: 'LOCAL', i: 0, amt: 30n },
-        { type: 'LOCAL', i: 1, amt: 10n },
-      ],
-      outputs: [], // No outputs for this group, so all inputs are burned
-    },
-  ]
-};
-```
-
----
-
-## D) Reissuance with Control
+## C) Reissuance with Control Asset
 
 This example shows how to reissue more units of an existing asset (`A`). Reissuance is a transaction where the output amount of an asset is greater than its input amount (Σoutputs > Σinputs). This is only allowed if the asset was created with a control asset, and that control asset (`C`) is present in the reissuance transaction.
 
@@ -222,6 +177,53 @@ const payload: Packet = {
 ```
 
 ---
+
+## D) Asset Burn
+
+This example demonstrates how to burn assets. A burn occurs when the sum of an asset's inputs is greater than the sum of its outputs (Σinputs > Σoutputs). In this case, two inputs containing the `XYZ` asset are spent, but no outputs are created for that asset group, resulting in the total amount being burned.
+
+### Transaction Diagram
+
+```mermaid
+flowchart LR
+  TX[(TX)]
+  i0["input index 0<br/>• XYZ: 30"] --> TX
+  i1["input index 1<br/>• XYZ: 10"] --> TX
+
+```
+
+### Asset Packet Definition
+
+- **Group[0] (Asset XYZ):**
+  - `AssetId`: `(txidX, gidxX)`
+  - `Inputs`: `(i:0, amt:30), (i:1, amt:10)`
+  - `Outputs`: `[]`
+  - *Result: Σin (40) > Σout (0). This is a valid burn.*
+
+### Code Example (TypeScript)
+
+```typescript
+import { Packet } from './arkade-assets-codec';
+
+const xyzAssetId = { txidHex: '88'.repeat(32), gidx: 0 }; // Placeholder
+
+const payload: Packet = {
+  groups: [
+    {
+      assetId: xyzAssetId,
+      inputs: [
+        { type: 'LOCAL', i: 0, amt: 30n },
+        { type: 'LOCAL', i: 1, amt: 10n },
+      ],
+      outputs: [], // No outputs for this group, so all inputs are burned
+    },
+  ]
+};
+```
+
+---
+
+
 
 ## E) Multi-Asset-Per-UTXO Transfer
 
@@ -400,7 +402,7 @@ const payload: Packet = {
 
 ## H) Teleport (Commit-Reveal)
 
-The teleport system allows assets to be moved between transactions without a direct UTXO dependency. It's a two-stage process: commit and reveal.
+The teleport system solves the circular dependency problem. It allows assets to be moved between transactions without a direct UTXO dependency as is the case during a batch swap. It's a two-stage process: commit and reveal.
 
 1.  **Commit Transaction:** An asset is spent into a `TELEPORT` output, which contains a commitment hash (e.g., `sha256(secret)`).
 2.  **Reveal Transaction:** A second, unrelated transaction can claim the teleported asset by providing the secret pre-image in a `TELEPORT` input. The hash of the pre-image must match the commitment hash.
@@ -591,7 +593,7 @@ This advanced contract creates a synthetic asset (`SynthUSD`) that is pegged to 
 
 ### Contract Logic
 
-The script uses introspection opcodes to check the asset balances for both the synthetic and base assets across inputs and outputs.
+The script uses introspection opcodes to check the asset balances for both the synthetic and base asset across inputs and outputs.
 
 1.  **Get Input and Output Sums:** It calculates the sum of inputs and outputs for both `SynthUSD` and `BaseAsset`.
 2.  **Enforce Peg:** It verifies that `(Σout_Synth - Σin_Synth) + (Σout_Base - Σin_Base) == 0`. This means that for every unit of `SynthUSD` created, one unit of `BaseAsset` must be deposited, and for every unit of `SynthUSD` burned, one unit of `BaseAsset` is returned.
