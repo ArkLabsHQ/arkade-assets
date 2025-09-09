@@ -4,9 +4,9 @@ This document outlines the design for ArkadeKitties, a decentralized game for co
 
 ## 1. Core Concept
 
-ArkadeKitties are unique, collectible digital assets. Each Kitty is a non-fungible Arkade Asset with an amount of 1 and has a distinct set of traits determined by its genetic code (genome), which is stored immutably on-chain as asset metadata. Players can buy, sell, and breed their Kitties to create new, rare offspring.
+ArkadeKitties are unique, collectible digital assets. Each Kitty is a non-fungible Arkade Asset with an amount of 1 and has a distinct set of traits determined by its genetic code (genome), which is stored immutably onchain as asset metadata. Players can buy, sell, and breed their Kitties to create new, rare offspring.
 
-The entire system is trustless. Ownership is enforced by the Ark protocol, and all game logic, including breeding, is executed by on-chain Arkade Script contracts, eliminating the need for a central server.
+The entire system is trustless. Ownership is enforced by the Ark protocol, and all game logic, including breeding, is executed by onchain Arkade Script contracts, eliminating the need for a central server.
 
 ## 2. Kitty Asset Representation
 
@@ -14,7 +14,7 @@ Each ArkadeKitty is a unique Arkade Asset with an amount of 1. The asset is non-
 
 - **Species Control via Presence-Only Enforcement**: All Kitties share the same control asset (the "Species Control" asset). Under the current spec and tools, control is presence-only: the Species Control group must be present somewhere in the transaction, but Δ=0 retention or re-locking is not required. Output introspection is still used to verify the child Kitty's properties (metadata, NFT amount, etc.).
 - **Species Control Asset**: A single control asset defines the species. Every Kitty's group MUST set `control` to this exact `assetId`. Transactions that mint or reissue Kitties MUST include the Species Control group (presence-only). Minting the control and the controlled asset in the same transaction is allowed by spec and supported by the tools.
-- **Genesis Asset (optional lore)**: A special "Genesis Kitty" can still exist as the first Kitty minted under the Species Control. Its `assetId` may be referenced off-chain for lore/UX, but authorization is strictly enforced by the Species Control.
+- **Genesis Asset (optional lore)**: A special "Genesis Kitty" can still exist as the first Kitty minted under the Species Control. Its `assetId` may be referenced offchain for lore/UX, but authorization is strictly enforced by the Species Control.
 
 - **Provenance Verification**: To prevent counterfeit assets, the `BreedKitties` contract enforces that any parent Kitty (and any child) sets its `control` reference to the Species Control `assetId`. Any asset with a different or missing control reference cannot be used for breeding and cannot be minted by the contract.
 
@@ -36,7 +36,7 @@ The appearance and traits of each Kitty are determined by its metadata, which co
 }
 ```
 
-Note: Visual traits like color, pattern, and cooldown are deterministically derived from the genome (see "Example Genome Breakdown") and are not committed as separate metadata keys on-chain.
+Note: Visual traits like color, pattern, and cooldown are deterministically derived from the genome (see "Example Genome Breakdown") and are not committed as separate metadata keys onchain.
 
 ## 4. Breeding Mechanism
 
@@ -44,7 +44,7 @@ Breeding is the core game mechanic. A player can select two Kitties they own (th
 
 ### Breeding Contract Example
 
-The `BreedKitties` contract is the heart of the game. It ensures that new Kitties are only created from valid parents and that their genomes are mixed deterministically. The user provides the parents' `genome` and `generation`; the contract recomputes the two-leaf Merkle root and verifies it matches the on-chain `metadataHash`. Crucially, the contract spends and retains the Species Control asset in every successful breeding transaction, so mints are only possible through the contract.
+The `BreedKitties` contract is the heart of the game. It ensures that new Kitties are only created from valid parents and that their genomes are mixed deterministically. The user provides the parents' `genome` and `generation`; the contract recomputes the two-leaf Merkle root and verifies it matches the onchain `metadataHash`. Crucially, the contract spends and retains the Species Control asset in every successful breeding transaction, so mints are only possible through the contract.
 
 ```typescript
 pragma arkade ^1.0.0;
@@ -74,7 +74,7 @@ function computeKittyMetadataRoot(genome: bytes32, generationBE8: bytes8) intern
 }
 
 // A simple, deterministic function to mix two genomes (opcode-friendly)
-// Use hashing instead of bytewise XOR to avoid byte arithmetic on-chain.
+// Use hashing instead of bytewise XOR to avoid byte arithmetic onchain.
 function mixGenomes(genomeA: bytes32, genomeB: bytes32, entropy: bytes32) internal returns (bytes32) {
     // There is a small chance of a "mutation" (1 in 256).
     // This is triggered by the last byte of entropy being zero.
@@ -180,7 +180,7 @@ contract BreedCommit(
         require(speciesGroup != null && speciesGroup.delta == 0, "Species Control must be present and retained");
 
         // 3. Construct the reveal script and enforce its creation
-        // The off-chain client is responsible for constructing the exact reveal script by
+        // The offchain client is responsible for constructing the exact reveal script by
         // parameterizing the BreedReveal contract template with the details of this commit.
         // The commit contract then verifies that the output at the specified index is locked
         // with this exact script, which it reconstructs here for verification.
@@ -267,21 +267,21 @@ contract BreedReveal(
 
 }
 
-## 5. On-Chain vs. Off-Chain Logic
+## 5. Onchain vs. Offchain Logic
 
-A key design principle in Arkade Script is the separation of concerns between on-chain contracts and off-chain clients (e.g., a user's wallet or a web interface).
+A key design principle in Arkade Script is the separation of concerns between onchain contracts and offchain clients (e.g., a user's wallet or a web interface).
 
-- **On-Chain (The Contract)**: The `BreedCommit` and `BreedReveal` contracts act as a **trustless arbiter**. Their only job is to enforce the rules of the game. They verify parent Kitties, check oracle signatures, and validate the properties of the new child Kitty.
+- **Onchain (The Contract)**: The `BreedCommit` and `BreedReveal` contracts act as a **trustless arbiter**. Their only job is to enforce the rules of the game. They verify parent Kitties, check oracle signatures, and validate the properties of the new child Kitty.
 
-- **Off-Chain (The Client)**: The user's client is responsible for **transaction construction**. This now happens in two stages:
+- **Offchain (The Client)**: The user's client is responsible for **transaction construction**. This now happens in two stages:
   1.  **Commit Transaction**: The client constructs a transaction that calls `commit`. It provides parent details and a `saltHash`, and creates an output locked with the `BreedReveal` script.
   2.  **Reveal Transaction**: After the oracle publishes randomness for the commit, the client constructs a second transaction. It spends the commit UTXO, calls `reveal`, and includes the new child Kitty output with the correct (and now known) metadata.
 
-If the client constructs a transaction that violates the on-chain rules (e.g., calculates the wrong genome), the contract will reject it, and the transaction will fail.
+If the client constructs a transaction that violates the onchain rules (e.g., calculates the wrong genome), the contract will reject it, and the transaction will fail.
 
 ## 6. Genome and Cattribute Mapping
 
-The visual appearance of a Kitty is derived directly from its `genome`. The 32-byte genome is treated as a series of gene segments, where each segment maps to a specific trait. This mapping is deterministic and public, allowing any client to render a Kitty just by reading its on-chain genome.
+The visual appearance of a Kitty is derived directly from its `genome`. The 32-byte genome is treated as a series of gene segments, where each segment maps to a specific trait. This mapping is deterministic and public, allowing any client to render a Kitty just by reading its onchain genome.
 
 **Example Genome Breakdown:**
 
@@ -306,7 +306,7 @@ The 32-byte genome is a blueprint for a Kitty's appearance and attributes. Below
 
 ## 7. Entropy and Breeding Predictability
 
-The deterministic nature of the initial `mixGenomes` function means that a breeder could predict the outcome of a breeding event before initiating it. This allows for "grinding"—running simulations off-chain to find favorable outcomes and only committing those transactions.
+The deterministic nature of the initial `mixGenomes` function means that a breeder could predict the outcome of a breeding event before initiating it. This allows for "grinding"—running simulations offchain to find favorable outcomes and only committing those transactions.
 
 To ensure fair and unpredictable breeding, we introduce entropy using a **commit-reveal scheme** combined with an external **oracle**.
 
