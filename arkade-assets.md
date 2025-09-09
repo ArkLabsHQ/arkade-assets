@@ -372,7 +372,7 @@ The indexer handles teleports through a two-phase validation process:
 
 ## 9. Arkade Batch Swap Support
 
-Teleport transfers provide native support for Arkade's batch swap mechanism, enabling seamless asset continuity across VTXO transitions from one batch to another.
+Teleport transfers provide native support for Arkade's batch swap mechanism, enabling seamless asset continuity across VTXO transitions from the virtual mempool to a new batch.
 
 ### The Batch Swap Challenge
 
