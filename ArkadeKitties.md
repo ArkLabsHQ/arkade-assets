@@ -12,7 +12,7 @@ The entire system is trustless. Ownership is enforced by the Ark protocol, and a
 
 Each ArkadeKitty is a unique Arkade Asset with an amount of 1. The asset is non-fungible and can be owned and transferred like any other asset on the network.
 
-- **Species Control via Presence-Only Enforcement**: All Kitties share the same control asset (the "Species Control" asset). Under the current spec and tools, control is presence-only: the Species Control group must be present somewhere in the transaction, but Δ=0 retention or re-locking is not required. Output introspection is still used to verify the child Kitty's properties (metadata, NFT amount, etc.).
+- **Species Control via Presence-Only Enforcement**: All Kitties share the same control asset (the "Species Control" asset). Under the current spec and tools, control is presence-only: the Species Control group must be present somewhere in the transaction. Output introspection is still used to verify the child Kitty's properties (metadata, NFT amount, etc.).
 - **Species Control Asset**: A single control asset defines the species. Every Kitty's group MUST set `control` to this exact `assetId`. Transactions that mint or reissue Kitties MUST include the Species Control group (presence-only). Minting the control and the controlled asset in the same transaction is allowed by spec and supported by the tools.
 - **Genesis Asset (optional lore)**: A special "Genesis Kitty" can still exist as the first Kitty minted under the Species Control. Its `assetId` may be referenced offchain for lore/UX, but authorization is strictly enforced by the Species Control.
 
