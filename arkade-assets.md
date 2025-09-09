@@ -2,37 +2,44 @@
 
 ## 1. Overview
 
-Arkade Asset V1 is UTXO-native asset system for Bitcoin transactions inspired by Runes and Liquid Assets.
+Arkade Asset V1 is a UTXO-native asset system for Bitcoin transactions inspired by Runes and Liquid Assets.
 
-Within Arkade, it requires no indexers: simply parsing the transaction is enough to observe and validate asset interactions. This is due to Arkade Signer's cosigning guard which validates before cosigning, along with its TEE assurances for verifibale honesty.
+Within Arkade, it requires no offchain indexers to track asset state: simply parsing the transaction is enough to observe and validate asset transfers. This is possible because the Arkade Signer's cosigning guard validates before cosigning, along with its TEE assurances for verifiable honesty.
 
-However, if used onchain, indexers/validators are required to follow the chain (both utxos and vtxos) and disregard invalid asset interaction transactions.
+However, if used onchain, indexers/validators are required to analyse the chain (both utxos and vtxos) and disregard invalid asset transactions.
 
-Assets are identified by 2 pieces of data, its genesis transaction hash, and group index. `(genesis_txid, group_index)`
+### Assets and Asset IDs
 
-Assets are projected onto Bitcoin transactions by embedding a well-defined data packet, the Arkade Asset V1 packet, in a Bitcoin output via OP_RETURN semantics.
+Arkade Assets are projected onto Bitcoin transactions by embedding a data packet, the **Arkade Asset V1 packet**.
 
-This data packet contains a set of (ordered) Asset Groups, which define asset details along with indexes of transaction inputs and outputs that are caarying this asset and the amounts. The order is important for fresh asset mint operations.
+Each Arkade Asset V1 packet, embedded in a Bitcoin output via OP_RETURN semantics, contains an ordered list of **Asset Groups** which define asset details along with indexes of transaction inputs and outputs that are carrying this asset and the amounts. The order is important for fresh asset mint operations.
 
-If an Asset group omits its Asset Id, it mints a **fresh asset** whose Asset Id in subsequent transactions is `(this_txid, group_index)`.
+Assets are identified by an Asset ID, which is always a pair: `AssetId: (genesis_txid, group_index)`
 
-If Asset Id is provided, the group operates on that existing asset.
+- `genesis_txid` = the transaction where the asset was first minted
+- `group_index` = the idnex of the asset group inside that genesis transaction
 
-When a fresh asset is being created, it may refer to another asset as its control asset. Issuance is valid if that control asset is present in the same transaction. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
+There are two cases: 
+- **Fresh mint**. If an Asset Group omits its Asset Id, it creates a new asset. It's Asset ID is `(this_txid, group_index)`, where `this_txid`is the current transaction hash. Since this is the genesis transaction for that asset, `this_txid = genesis_txid`.
+- **Existing asset**. If the Asset Group specifies an Asset ID, it refers back to an already minted asset `(genesis_txid, group_index)`  
 
-Control assets allow additional, future reissuance of a token, and are themselves assets. When a positive delta (Σout > Σin) is detected in an asset group that specifies a control asset, that control asset MUST appear in the same transaction. This requirement applies to both fresh issuance and reissuance. If an asset did not specify a control asset at genesis, it cannot be reissued.
+### Control Assets and Reissuance
+
+When a fresh asset is being created, its asset group may specify a control asset. Issuance of a new asset is valid if that control asset is present in the same transaction. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
+
+Control assets allow additional, future reissuance of a token, and are themselves assets. If an asset group increases supply (Σout > Σin), the corresponding control asset MUST appear in the same transaction. This requirement applies to both fresh issuance and reissuance. 
+
+If an asset did not specify a control asset at genesis, it cannot be reissued and its total supply is forever capped at the amount created in its genesis transaction.
 
 Arkade Asset V1 supports projecting multiple assets unto a single UTXO, and BTC amounts are orthogonal and not included in asset accounting.
 
 Asset amounts are atomic units, and supply management is managed through UTXO spending conditions.
 
-
-
 ---
 
 ## 2. OP\_RETURN structure
 
-Exactly **one OP\_RETURN output** must contain the protocol packet, prefixed with magic bytes. The packet itself is a top-level TLV (Type-Length-Value) stream, allowing multiple data types to coexist within a single transaction.
+Exactly **one OP\_RETURN output** must contain the Arkade Asset protocol packet, prefixed with magic bytes. The packet itself is a top-level TLV (Type-Length-Value) stream, allowing multiple data types to coexist within a single transaction.
 
 ```
 scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
@@ -44,7 +51,7 @@ scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 
 ### Arkade Asset V1 Packet (Type 0x00)
 
-The ArkAsset data is identified by `Type = 0x00`. The `Value` of this record is the asset payload itself.
+The Arkade Asset data is identified by `Type = 0x00`. The `Value` of this record is the asset payload itself.
 
 ```
 <Type: 0x00> <Length: L> <Value: Asset_Payload>
@@ -52,7 +59,7 @@ The ArkAsset data is identified by `Type = 0x00`. The `Value` of this record is 
 
 - **Asset_Payload**: The TLV packet containing asset group data (see below).
 
-**Note (Implicit Burn Policy):** If a transaction spends any UTXOs known to carry ArkAsset balances but contains no `OP_RETURN` with an ArkAsset packet (Type `0x00`), those balances are considered irrecoverably burned. Indexers MUST remove such balances from their state.
+**Note (Implicit Burn Policy):** If a transaction spends any UTXOs known to carry Arkade Asset balances but contains no `OP_RETURN` with an Arkade Asset packet (Type `0x00`), those balances are considered irrecoverably burned. Indexers MUST remove such balances from their state.
 
 ---
 
@@ -92,6 +99,7 @@ Issuance := {
 - **Genesis (Fresh Assets)**: The `Issuance` property is **only allowed** when creating a fresh asset (i.e., when `AssetId` is absent). It defines the initial control policy and metadata.
   - If `Issuance.Immutable` is set to `true`, the asset's metadata can never be changed.
   - The `Metadata` property **must not** be present at genesis.
+  - If `Issuance.ControlAsset` is omitted, no future token reissuance is possible. 
 
 - **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
   1. Include the asset's `ControlAsset` as an input to authorize the change.
@@ -123,8 +131,6 @@ For data structures that represent one of several variants (a `oneof` structure)
 -   **`AssetInput`**: `0x01` for `LOCAL`, `0x02` for `TELEPORT`.
 -   **`AssetOutput`**: `0x01` for `LOCAL`, `0x02` for `TELEPORT`.
 
-This hybrid approach balances compactness for the `Group` structure with the flexibility of type markers for variant data types.
-
 ### Types
 
 ```
@@ -132,21 +138,22 @@ AssetId   := { txid: bytes32, gidx: u16 } # the genesis tx id that first issued 
 
 AssetRef  := oneof {
                0x01 BY_ID    { assetid: AssetId } # if existing asset
-             | 0x02 BY_GROUP { gidx: u16 } # if fresh asset (does not exist yet therefore no Assetid)
+             | 0x02 BY_GROUP { gidx: u16 } # if fresh asset (does not exist yet therefore no AssetId)
              }
 
 AssetInput := oneof {
                0x01 LOCAL    { i: u16, amt: u64 }                    # input from same transaction's prevouts
-             | 0x02 TELEPORT { commitment: bytes32, amt: u64 }       # input from external teleport via commitment
+             | 0x02 TELEPORT { commitment: bytes32, amt: u64 }       # input from external teleport via commitment 
              }
 
 AssetOutput := oneof {
                0x01 LOCAL    { o: u16, amt: u64 }                    # output within same transaction
-             | 0x02 TELEPORT { commitment: bytes32, amt: u64 }       # output to external transaction via commitment
+             | 0x02 TELEPORT { commitment: bytes32, amt: u64 }       # output to external transaction via commitment 
              }
 
 TeleportCommitment := sha256(payment_script || nonce)
 ```
+This hybrid approach balances compactness for the `Group` structure with the flexibility of type markers for variant data types.
 
 ---
 
@@ -167,42 +174,41 @@ TeleportCommitment := sha256(payment_script || nonce)
 To solve the circular dependency problem, teleports use a **commitment hash** instead of direct txid references:
 
 1. **Creating a Teleport Output**:
-   - Sender generates: `commitment = sha256(payment_script || nonce)`
-   - Creates `AssetOutput::TELEPORT { commitment, amt }`
-   - The `payment_script` is the receiver's scriptPubKey that gets committed to (for later claiming)
+   - Creates `AssetOutput::TELEPORT { commitment, amt }` with 
+     - Sender generates: `commitment = sha256(payment_script || nonce)` and
+     - `payment_script` is the receiver's scriptPubKey that gets committed to (for future claiming)
 
 2. **Claiming a Teleport Input**:
    - Receiver creates a transaction with an output containing the `payment_script`
    - References the teleport via `AssetInput::TELEPORT { commitment, amt }`
    - Must provide proof in witness: `{ payment_script, nonce }`
    - **The teleported assets MUST be assigned to a LOCAL output that has the committed `payment_script`**
-   - Indexer validates: 
+   - Arkade Signer (offchain) / Indexer (onchain) validates: 
      - `sha256(payment_script || nonce) == commitment`
      - Transaction contains at least one output with the exact `payment_script`
-     - Looks up the commitment in pending teleports to find source_txid
-     - **Verifies the assets flow to an output with the committed `payment_script`**
+     - Commitment matches an entry in pending teleports with the correct `source_txid`
+     - **The assets flow matches an output carrying the committed `payment_script`**
 
 3. **Validation Rules**:
-   - Indexer tracks pending teleports by commitment hash.
+   - Arkade Signer (offchain) / Indexer (onchain) tracks pending teleports via commitment hash.
    - **Lifecycle & Claiming Rules**:
-     - **Arkade-Native Teleport**: If a teleport is created by an *arkade* transaction, it is instantly claimable by **any** other transaction (arkade or on-chain). No confirmation delay is required.
-     - **On-Chain Teleport**: If a teleport is created by an *on-chain* transaction, it can be claimed by **any** other transaction (arkade or on-chain) after a minimum number of block confirmations (e.g., 6 blocks). This delay protects against reorg attacks.
-   - In summary, an indexer must enforce the following:
-     - **Arkade Source**: Instantly claimable by any destination.
-     - **On-Chain Source**: Claimable by any destination only after `N` confirmations.
-   - When a teleport input is claimed, the indexer also verifies:
+     - **Arkade-Native Teleport**: If a teleport is created by an *arkade* transaction, it is instantly claimable by **any** other transaction (arkade or onchain). No confirmation delay is required.
+     - **Onchain Teleport**: If a teleport is created by an *onchain* transaction, it can be claimed by **any** other transaction (arkade or onchain) after a minimum number of block confirmations (e.g., 6 blocks). This delay protects against reorg attacks.
+   - When a teleport input is claimed, the Signer/Indexer also verifies:
      - The source transaction exists and has the corresponding teleport output.
      - The claiming transaction has an output with the matching `payment_script`.
      - **Assets from the teleport input MUST flow to a LOCAL output with the committed `payment_script`**.
    - Unclaimed teleports remain pending until claimed.
-
    - **Competing Claims**: In scenarios where multiple transactions attempt to claim the same teleport, the first valid claim to be processed wins. This implies:
-     - An arkade transaction will always win against a competing on-chain transaction, as it is processed first.
-     - If two on-chain transactions compete, the one in the earlier block wins.
+     - An arkade transaction will always win against a competing onchain transaction, as it is processed faster.
+     - If two onchain transactions compete, the one in the earlier mined block wins.
+     - If two onchain transactions compete and are mined in the same block, the one with the lowest index in the block wins.
+     
+
 
 ### Teleport State Tracking
 
-The indexer maintains:
+The Signer/Indexer maintains:
 ```
 PendingTeleport := {
   commitment: bytes32,
@@ -233,25 +239,23 @@ This method proves who the original creator of an asset was by linking them to t
 
 -   **What to Prove**: Ownership of a Bitcoin UTXO that was spent as an input in the asset's genesis transaction.
 -   **How it Works**: The issuing entity (e.g., Tether) uses the private key for one of the genesis transaction's inputs to sign a message.
--   **Example Message**: `"We, Tether, certify that the ArkAsset with genesis txid [genesis_txid] and group index [gidx] is the official USDT-Ark."`
--   **Use Case**: A one-time, static proof to establish the authentic origin of an asset.
+-   **Example Message**: `"We, Tether, certify that the Arkade Asset with genesis txid [genesis_txid] and group index [gidx] is the official USDT-Arkade."`
 
 **2. Proof of Control (Dynamic Proof)**
 
-This method proves who currently has administrative rights over an asset (e.g., the ability to reissue it). This is the most robust method for proving ongoing authenticity.
+This method proves who has administrative rights over an asset (e.g., the ability to reissue it). This is the most robust method for proving ongoing authenticity.
 
--   **What to Prove**: Ownership of the UTXO that currently holds the asset's **control asset**.
+-   **What to Prove**: Ownership of the UTXO that holds the asset's control asset.
 -   **How it Works**: The entity uses the private key for the UTXO holding the control asset to sign a message. An indexer is used to find which UTXO currently holds the control asset.
--   **Example Message**: `"As the current controller of USDT-Ark, Tether authorizes this action at block height X."`
--   **Use Case**: Proving ongoing administrative control for actions like reissuance or for periodic attestations of authenticity.
+-   **Example Message**: `"As the current controller of USDT-Arkade, Tether authorizes this action at block height X."`
 
-In summary, while Proof of Genesis establishes historical origin, **Proof of Control** provides a dynamic and continuous way to verify an asset's authenticity by linking it to a live, controlled UTXO on the Bitcoin blockchain.
+In summary, **Proof of Genesis** establishes historical origin, a one-time, static origin of an asset, **Proof of Control** provides an ongoing mechanism to demonstrate administrative authority - supporting actions such as reissuance or periodic attestations of authenticity - by linking the asset to a live, controlled UTXO on the Bitcoin blockchain. 
 
 ---
 
 ### Asset Metadata
 
-ArkAsset supports a flexible, on-chain key-value model for metadata in the asset group. Well-known keys (e.g., `name`, `ticker`, `decimals`) can be defined in a separate standards document, but any key-value pair is valid.
+Arkade Asset supports a flexible, onchain key-value model for metadata in the asset group. Well-known keys (e.g., `name`, `ticker`, `decimals`) can be defined in a separate standards document, but any key-value pair is valid.
 
 Metadata is managed directly within the `Group` packet structure:
 
@@ -271,33 +275,33 @@ To update the metadata for an existing asset, a `Group` for that asset must be i
 
 **3. Metadata Introspection**
 
-To enable trustless, on-chain validation of asset properties without incurring high overhead, an indexer MUST make a hash of an asset's current metadata available to the script execution environment.
+To enable trustless, onchain validation of asset properties without incurring high overhead, an indexer MUST make a hash of an asset's current metadata available to the script execution environment.
 
 - **Rule**: When building the transaction context for script execution, for each `Group` in the packet, the indexer must compute and expose a `metadataHash` for the corresponding asset. This hash is a read-only snapshot of the state *before* the current transaction is applied.
 - **Behavior**: A smart contract can then verify a specific piece of metadata by requiring the user to provide the full metadata as a function argument. The contract hashes the provided data and compares it against the `metadataHash` from the introspection API.
 
-- **Hashing Mechanism**: The `metadataHash` is the **Merkle root** of the asset's metadata. This provides a secure and efficient way to verify individual key-value pairs without processing the full metadata set on-chain.
+- **Hashing Mechanism**: The `metadataHash` is the **Merkle root** of the asset's metadata. This provides a secure and efficient way to verify individual key-value pairs without processing the full metadata set onchain.
   - **Leaf Generation**: The leaves of the Merkle tree are the `sha256` hashes of the canonically encoded key-value pairs. The pairs MUST be sorted by key before hashing to ensure a deterministic root.
   - **Canonical Entry Format**: `leaf[i] = sha256(varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])`
-  - **Verification**: This model allows a user to prove a specific metadata property by providing the key, value, and a Merkle path to the contract. The contract can then verify the proof against the on-chain root hash.
+  - **Verification**: This model allows a user to prove a specific metadata property by providing the key, value, and a Merkle path to the contract. The contract can then verify the proof against the onchain root hash.
 
 ---
 
 ## 7. Indexer State and Reorganization Handling
 
-To ensure data integrity and consistency with the underlying Bitcoin blockchain, the ArkAsset (onchain) indexer is designed to handle blockchain reorganizations (reorgs) and transaction replacements (RBF).
+To ensure data integrity and consistency with the underlying Bitcoin blockchain, the Arkade Asset (onchain) indexer is designed to handle blockchain reorganizations (reorgs) and transaction replacements (RBF).
 
 ### State Versioning
 
 The indexer's state (including all asset definitions, UTXO balances, and processed transactions) is not stored in a single monolithic file. Instead, it is versioned by block height. After processing all transactions in a block, the indexer saves a complete snapshot of the new state into a file named `state_<height>.json`.
 
 - **Genesis State**: The state before any blocks are processed is at `blockHeight: -1`.
-- **Block 100**: After processing, the state is saved to `state_100.json` and the internal `blockHeight` becomes `100`.
-- **Block 101**: The indexer loads `state_100.json`, applies transactions from block 101, and saves the result to `state_101.json`.
+- **Block 100**: After processing, the state is saved to `state_n.json` and the internal `blockHeight` becomes `n`.
+- **Block 101**: The indexer loads `state_(n+1).json`, applies transactions from block 101, and saves the result to `state_(n+1).json`.
 
 ### Block-Level Atomicity
 
-Transactions are applied on a per-block basis. The indexer first loads the state from the previous block (`N-1`) and applies all transactions from the new block (`N`) to a temporary, in-memory copy of the state. Only if all transactions in the block are valid and applied successfully is the new state committed to disk as `state_N.json`. If any transaction fails, the entire block is rejected, and no changes are saved.
+Transactions are applied on a per-block basis. The indexer first loads the state from the previous block (`n-1`) and applies all transactions from the new block (`n`) to a temporary, in-memory copy of the state. Only if all transactions in the block are valid and applied successfully is the new state committed to disk as `state_N.json`. If any transaction fails, the entire block is rejected, and no changes are saved.
 
 ### Rollback on Reorganization
 
@@ -321,7 +325,7 @@ The indexer implementation described here operates on **confirmed blocks only**.
 
 ## 8. Teleport Transfers
 
-Teleport transfers enable assets to be projected to outputs in external transactions, solving asset continuity challenges in cross-transaction scenarios like batch swaps.
+Teleport transfers enable assets to be projected to outputs in external transactions, solving asset continuity challenges across batches.
 
 ### Mechanism
 
@@ -351,7 +355,7 @@ When processing a transaction with teleport outputs:
 ### Asset Identity Preservation
 
 Teleported assets maintain their original `(genesis_txid, group_index)` identity. This ensures:
-- Asset definitions remain traceable to their genesis
+- Asset transfers remain traceable to their genesis
 - Control asset relationships are preserved
 - Metadata history is maintained across teleports
 
@@ -368,14 +372,14 @@ The indexer handles teleports through a two-phase validation process:
 
 ## 9. Arkade Batch Swap Support
 
-Teleport transfers provide native support for Arkade's batch swap mechanism, enabling seamless asset continuity across VTXO transitions.
+Teleport transfers provide native support for Arkade's batch swap mechanism, enabling seamless asset continuity across VTXO transitions from the virtual mempool to a new batch.
 
 ### The Batch Swap Challenge
 
 In Arkade, users periodically perform batch swaps to:
 - Transition preconfirmed VTXOs to confirmed state
-- Extend VTXO expiry times
-- Maintain settlement guarantees
+- Reset VTXO expiry times
+- Maintain unilateral exit guarantees
 
 Without teleports, assets in old VTXOs would be lost during batch swaps, requiring complex workarounds or operator liquidity fronting.
 
