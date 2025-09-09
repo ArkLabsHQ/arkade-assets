@@ -325,7 +325,7 @@ The indexer implementation described here operates on **confirmed blocks only**.
 
 ## 8. Teleport Transfers
 
-Teleport transfers enable assets to be projected to outputs in external transactions, solving asset continuity challenges acrss batches.
+Teleport transfers enable assets to be projected to outputs in external transactions, solving asset continuity challenges across batches.
 
 ### Mechanism
 
