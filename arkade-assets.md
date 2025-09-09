@@ -202,6 +202,8 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
    - **Competing Claims**: In scenarios where multiple transactions attempt to claim the same teleport, the first valid claim to be processed wins. This implies:
      - An arkade transaction will always win against a competing onchain transaction, as it is processed faster.
      - If two onchain transactions compete, the one in the earlier mined block wins.
+     - If two onchain transactions compete and are mined in the same block, the one with the lowest index in the block wins.
+     
 
 
 ### Teleport State Tracking
