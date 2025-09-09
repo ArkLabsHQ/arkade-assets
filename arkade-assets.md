@@ -2,6 +2,15 @@
 
 ## 1. Overview
 
+### 1.1. Hybrid System Architecture
+
+The Arkade Asset protocol is designed to operate in a hybrid environment, with assets moving seamlessly between off-chain Arkade transactions and on-chain Bitcoin transactions. This architecture imposes a critical requirement: a unified view of the asset state.
+
+-   The **Arkade Signer** (off-chain) must be aware of on-chain events. To validate transactions that might spend on-chain teleports or interact with on-chain assets, the Signer must have access to the state of the Bitcoin blockchain. It effectively acts as a private indexer for the user.
+-   An **On-chain Indexer** must be aware of Arkade-native transactions. To present a complete and accurate public ledger of assets, the indexer must be able to ingest and validate state transitions that occur within the Arkade system, by observing all relevant Arkade-native transactions.
+
+This ensures that an asset's history is unbroken and its ownership is unambiguous, regardless of how it is transferred.
+
 Arkade Asset V1 is a UTXO-native asset system for Bitcoin transactions inspired by Runes and Liquid Assets.
 
 Within Arkade, it requires no offchain indexers to track asset state: simply parsing the transaction is enough to observe and validate asset transfers. This is possible because the Arkade Signer's cosigning guard validates before cosigning, along with its TEE assurances for verifiable honesty.
@@ -182,12 +191,12 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
    - Receiver creates a transaction with an output containing the `payment_script`
    - References the teleport via `AssetInput::TELEPORT { commitment, amt }`
    - Must provide proof in witness: `{ payment_script, nonce }`
-   - **The teleported assets MUST be assigned to a LOCAL output that has the committed `payment_script`**
+   - The teleported assets MUST be assigned, in aggregate amount, to one or more LOCAL outputs whose `scriptPubKey` equals the committed `payment_script`. Indexers MUST verify the sum across those outputs >= claimed amount.
    - Arkade Signer (offchain) / Indexer (onchain) validates: 
      - `sha256(payment_script || nonce) == commitment`
      - Transaction contains at least one output with the exact `payment_script`
      - Commitment matches an entry in pending teleports with the correct `source_txid`
-     - **The assets flow matches an output carrying the committed `payment_script`**
+     - The assets flow matches the aggregate amount of outputs carrying the committed `payment_script`
 
 3. **Validation Rules**:
    - Arkade Signer (offchain) / Indexer (onchain) tracks pending teleports via commitment hash.
@@ -334,7 +343,7 @@ A teleport transfer is specified using the `TELEPORT` variant of `AssetOutput`:
 ```
 AssetOutput := oneof {
   0x01 LOCAL    { o: u16, amt: u64 }                    # output within same transaction
-  0x02 TELEPORT { txid: bytes32, vout: u32, amt: u64 } # output to external transaction via commitment
+  0x02 TELEPORT { commitment: bytes32, amt: u64 }# output to external transaction via commitment
 }
 ```
 
@@ -349,7 +358,7 @@ When processing a transaction with teleport outputs:
 - **Balance Conservation**: `sum(LOCAL inputs) + sum(TELEPORT inputs) = sum(LOCAL outputs) + sum(TELEPORT outputs)`
 - **Teleport Acknowledgment**: Target transaction MUST include `TELEPORT` input matching source's `TELEPORT` output
 - **Exact Matching**: Teleport input/output pairs must have identical `txid`, `vout`, `amt`, and `AssetId`
-- **Atomicity**: Both source and target transactions must be confirmed for teleport validity
+- **Atomicity**: For on-chain sources, both source and target transactions MUST be confirmed (with N conf on the source as configured). For Arkade-native sources, claims MAY be processed immediately by Arkade.
 - **No Double-Spend**: Assets cannot be both transferred locally and teleported in the same group
 
 ### Asset Identity Preservation
