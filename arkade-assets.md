@@ -26,10 +26,10 @@ Each Arkade Asset V1 packet, embedded in a Bitcoin output via OP_RETURN semantic
 Assets are identified by an Asset ID, which is always a pair: `AssetId: (genesis_txid, group_index)`
 
 - `genesis_txid` = the transaction where the asset was first minted
-- `group_index` = the idnex of the asset group inside that genesis transaction
+- `group_index` = the index of the asset group inside that genesis transaction
 
 There are two cases: 
-- **Fresh mint**. If an Asset Group omits its Asset Id, it creates a new asset. It's Asset ID is `(this_txid, group_index)`, where `this_txid`is the current transaction hash. Since this is the genesis transaction for that asset, `this_txid = genesis_txid`.
+- **Fresh mint**. If an Asset Group omits its Asset ID, it creates a new asset. It's Asset ID is `(this_txid, group_index)`, where `this_txid`is the current transaction hash. Since this is the genesis transaction for that asset, `this_txid = genesis_txid`.
 - **Existing asset**. If the Asset Group specifies an Asset ID, it refers back to an already minted asset `(genesis_txid, group_index)`  
 
 ### Control Assets and Reissuance
@@ -107,7 +107,7 @@ Issuance := {
 
 - **Genesis (Fresh Assets)**: The `Issuance` property is **only allowed** when creating a fresh asset (i.e., when `AssetId` is absent). It defines the initial control policy and metadata.
   - If `Issuance.Immutable` is set to `true`, the asset's metadata can never be changed.
-  - The `Metadata` property **must not** be present at genesis.
+  - Initial Metadata is set via `Issuance.Metadata`. The `Group.Metadata` property **must not** be present at genesis.
   - If `Issuance.ControlAsset` is omitted, no future token reissuance is possible. 
 
 - **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
