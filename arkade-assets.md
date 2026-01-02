@@ -34,7 +34,7 @@ There are two cases:
 
 ### Control Assets and Reissuance
 
-When a fresh asset is being created, its asset group may specify a control asset. Issuance of a new asset is valid if that control asset is present in the same transaction. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
+When a fresh asset is being created, its asset group may specify a control asset. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
 
 Control assets allow additional, future reissuance of a token, and are themselves assets. If an asset group increases supply (Σout > Σin), the corresponding control asset MUST appear in the same transaction. This requirement applies to both fresh issuance and reissuance.
 
