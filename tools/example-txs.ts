@@ -1,7 +1,7 @@
 // tools/example-txs.ts
 // Example transactions for Arkade Asset V1.
 
-import { buildOpReturnScript, bufToHex, Packet } from './arkade-assets-codec';
+import { buildOpReturnScript, bufToHex, Packet, TeleportWitness } from './arkade-assets-codec';
 
 interface TxVout {
   n: number;
@@ -236,6 +236,251 @@ export function exampleB(txidHex: string): Tx {
       { n: 0, scriptPubKey: '51' }, // Control re-output
       { n: 1, scriptPubKey: '51' }, // Token output
       { n: 2, scriptPubKey: scriptHex }, // OP_RETURN
+    ],
+  };
+}
+
+// ==================== SIMPLE TRANSFER ====================
+
+export function exampleF_simple_transfer(txidHex: string): Tx {
+  // Example F: Simple transfer - move tokens from one UTXO to another
+  // Σin = Σout (no issuance, no burn)
+  const tokenAssetId = { txidHex: '70'.repeat(32), gidx: 0 };
+
+  const groups: Packet['groups'] = [
+    {
+      assetId: tokenAssetId,
+      inputs: [
+        { type: 'LOCAL' as const, i: 0, amt: 100n },
+        { type: 'LOCAL' as const, i: 1, amt: 40n },
+      ],
+      outputs: [
+        { type: 'LOCAL' as const, o: 0, amt: 70n },
+        { type: 'LOCAL' as const, o: 1, amt: 70n },
+      ],
+    },
+  ];
+
+  const script = buildOpReturnScript({ groups });
+  const scriptHex = bufToHex(script);
+
+  return {
+    txid: txidHex,
+    vin: [
+      { txid: tokenAssetId.txidHex, vout: 0 },
+      { txid: tokenAssetId.txidHex, vout: 1 },
+    ],
+    vout: [
+      { n: 0, scriptPubKey: '51' },
+      { n: 1, scriptPubKey: '51' },
+      { n: 2, scriptPubKey: scriptHex },
+    ],
+  };
+}
+
+// ==================== ASSET BURN ====================
+
+export function exampleG_burn(txidHex: string): Tx {
+  // Example G: Burn tokens - Σin > Σout
+  const tokenAssetId = { txidHex: '88'.repeat(32), gidx: 0 };
+
+  const groups: Packet['groups'] = [
+    {
+      assetId: tokenAssetId,
+      inputs: [
+        { type: 'LOCAL' as const, i: 0, amt: 30n },
+        { type: 'LOCAL' as const, i: 1, amt: 10n },
+      ],
+      outputs: [], // No outputs = all 40 tokens burned
+    },
+  ];
+
+  const script = buildOpReturnScript({ groups });
+  const scriptHex = bufToHex(script);
+
+  return {
+    txid: txidHex,
+    vin: [
+      { txid: tokenAssetId.txidHex, vout: 0 },
+      { txid: tokenAssetId.txidHex, vout: 1 },
+    ],
+    vout: [
+      { n: 0, scriptPubKey: scriptHex }, // Only OP_RETURN
+    ],
+  };
+}
+
+// ==================== REISSUANCE WITH CONTROL ====================
+
+export function exampleH_reissuance(txidHex: string): Tx {
+  // Example H: Reissuance - Σout > Σin with control asset present
+  const controlAssetId = { txidHex: 'cc'.repeat(32), gidx: 0 };
+  const tokenAssetId = { txidHex: 'aa'.repeat(32), gidx: 1 };
+
+  const groups: Packet['groups'] = [
+    // Control asset (must be present for reissuance)
+    {
+      assetId: controlAssetId,
+      inputs: [{ type: 'LOCAL' as const, i: 0, amt: 1n }],
+      outputs: [{ type: 'LOCAL' as const, o: 0, amt: 1n }],
+    },
+    // Token being reissued (200 in, 230 out = +30 new tokens)
+    {
+      assetId: tokenAssetId,
+      inputs: [{ type: 'LOCAL' as const, i: 1, amt: 200n }],
+      outputs: [{ type: 'LOCAL' as const, o: 1, amt: 230n }],
+    },
+  ];
+
+  const script = buildOpReturnScript({ groups });
+  const scriptHex = bufToHex(script);
+
+  return {
+    txid: txidHex,
+    vin: [
+      { txid: controlAssetId.txidHex, vout: 0 },
+      { txid: tokenAssetId.txidHex, vout: 1 },
+    ],
+    vout: [
+      { n: 0, scriptPubKey: '51' }, // Control re-output
+      { n: 1, scriptPubKey: '51' }, // Token output (reissued)
+      { n: 2, scriptPubKey: scriptHex },
+    ],
+  };
+}
+
+// ==================== MULTI-ASSET PER UTXO ====================
+
+export function exampleI_multi_asset_per_utxo(txidHex: string): Tx {
+  // Example I: Multiple assets in a single UTXO
+  // Input 0 contains both Asset X (10) and Asset Y (50)
+  const assetX = { txidHex: '55'.repeat(32), gidx: 0 };
+  const assetY = { txidHex: '66'.repeat(32), gidx: 1 };
+
+  const groups: Packet['groups'] = [
+    {
+      assetId: assetX,
+      inputs: [{ type: 'LOCAL' as const, i: 0, amt: 10n }],
+      outputs: [{ type: 'LOCAL' as const, o: 0, amt: 10n }],
+    },
+    {
+      assetId: assetY,
+      inputs: [{ type: 'LOCAL' as const, i: 0, amt: 50n }], // Same input as X!
+      outputs: [{ type: 'LOCAL' as const, o: 1, amt: 50n }],
+    },
+  ];
+
+  const script = buildOpReturnScript({ groups });
+  const scriptHex = bufToHex(script);
+
+  return {
+    txid: txidHex,
+    vin: [
+      { txid: 'ab'.repeat(32), vout: 0 }, // Single input with both assets
+    ],
+    vout: [
+      { n: 0, scriptPubKey: '51' }, // Asset X output
+      { n: 1, scriptPubKey: '51' }, // Asset Y output
+      { n: 2, scriptPubKey: scriptHex },
+    ],
+  };
+}
+
+// ==================== TELEPORT COMMIT ====================
+
+export function exampleJ_teleport_commit(txidHex: string, commitmentHex: string): Tx {
+  // Example J: Teleport commit - send tokens to a teleport output
+  const tokenAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
+
+  const groups: Packet['groups'] = [
+    {
+      assetId: tokenAssetId,
+      inputs: [{ type: 'LOCAL' as const, i: 0, amt: 100n }],
+      outputs: [
+        { type: 'TELEPORT' as const, commitment: commitmentHex, amt: 100n },
+      ],
+    },
+  ];
+
+  const script = buildOpReturnScript({ groups });
+  const scriptHex = bufToHex(script);
+
+  return {
+    txid: txidHex,
+    vin: [
+      { txid: tokenAssetId.txidHex, vout: 0 },
+    ],
+    vout: [
+      { n: 0, scriptPubKey: scriptHex }, // Only OP_RETURN (no LOCAL outputs)
+    ],
+  };
+}
+
+// ==================== TELEPORT CLAIM ====================
+
+export function exampleK_teleport_claim(txidHex: string, witness: TeleportWitness): Tx {
+  // Example K: Teleport claim - claim tokens from a teleport commitment
+  // Commitment is derived from witness as sha256(paymentScript || nonce)
+  const tokenAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
+
+  const groups: Packet['groups'] = [
+    {
+      assetId: tokenAssetId,
+      inputs: [
+        { type: 'TELEPORT' as const, amt: 100n, witness },
+      ],
+      outputs: [
+        { type: 'LOCAL' as const, o: 0, amt: 100n },
+      ],
+    },
+  ];
+
+  const script = buildOpReturnScript({ groups });
+  const scriptHex = bufToHex(script);
+
+  return {
+    txid: txidHex,
+    vin: [], // No Bitcoin inputs needed for teleport claim (in Arkade context)
+    vout: [
+      { n: 0, scriptPubKey: '51' }, // Token output
+      { n: 1, scriptPubKey: scriptHex },
+    ],
+  };
+}
+
+// ==================== MULTI-ASSET PER TRANSACTION ====================
+
+export function exampleL_multi_asset_per_tx(txidHex: string): Tx {
+  // Example L: Multiple independent asset transfers in one transaction
+  const assetP = { txidHex: 'ab'.repeat(32), gidx: 0 };
+  const assetQ = { txidHex: 'cd'.repeat(32), gidx: 0 };
+
+  const groups: Packet['groups'] = [
+    {
+      assetId: assetP,
+      inputs: [{ type: 'LOCAL' as const, i: 0, amt: 10n }],
+      outputs: [{ type: 'LOCAL' as const, o: 0, amt: 10n }],
+    },
+    {
+      assetId: assetQ,
+      inputs: [{ type: 'LOCAL' as const, i: 1, amt: 50n }],
+      outputs: [{ type: 'LOCAL' as const, o: 1, amt: 50n }],
+    },
+  ];
+
+  const script = buildOpReturnScript({ groups });
+  const scriptHex = bufToHex(script);
+
+  return {
+    txid: txidHex,
+    vin: [
+      { txid: assetP.txidHex, vout: 0 },
+      { txid: assetQ.txidHex, vout: 1 },
+    ],
+    vout: [
+      { n: 0, scriptPubKey: '51' }, // Asset P output
+      { n: 1, scriptPubKey: '51' }, // Asset Q output
+      { n: 2, scriptPubKey: scriptHex },
     ],
   };
 }

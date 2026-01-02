@@ -5,7 +5,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { buildTxFromPayload, Tx } from './make-opreturn';
 import { Packet } from './arkade-assets-codec';
-import { exampleA, exampleB, exampleC, exampleE_metadata_update } from './example-txs';
+import {
+  exampleA,
+  exampleB,
+  exampleC,
+  exampleE_metadata_update,
+  exampleF_simple_transfer,
+  exampleG_burn,
+  exampleH_reissuance,
+  exampleI_multi_asset_per_utxo,
+  exampleJ_teleport_commit,
+  exampleK_teleport_claim,
+  exampleL_multi_asset_per_tx,
+} from './example-txs';
 import { Indexer } from './indexer';
 import { NodeFileStorage } from './node-storage';
 
@@ -23,6 +35,7 @@ function handleMakeTx(args: { [key: string]: any }): void {
   let tx;
 
   if (args.example) {
+    const commitmentHex = (args.commitment as string) || 'ab'.repeat(32);
     switch (args.example.toUpperCase()) {
       case 'A':
         tx = exampleA(txidHex);
@@ -36,8 +49,30 @@ function handleMakeTx(args: { [key: string]: any }): void {
       case 'E':
         tx = exampleE_metadata_update(txidHex);
         break;
+      case 'F':
+        tx = exampleF_simple_transfer(txidHex);
+        break;
+      case 'G':
+        tx = exampleG_burn(txidHex);
+        break;
+      case 'H':
+        tx = exampleH_reissuance(txidHex);
+        break;
+      case 'I':
+        tx = exampleI_multi_asset_per_utxo(txidHex);
+        break;
+      case 'J':
+        tx = exampleJ_teleport_commit(txidHex, commitmentHex);
+        break;
+      case 'K':
+        tx = exampleK_teleport_claim(txidHex, commitmentHex);
+        break;
+      case 'L':
+        tx = exampleL_multi_asset_per_tx(txidHex);
+        break;
       default:
         console.error(`Unknown example: ${args.example}`);
+        console.error('Available examples: A, B, C, E, F, G, H, I, J, K, L');
         process.exit(1);
     }
   } else if (args['update-metadata']) {

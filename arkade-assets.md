@@ -36,9 +36,17 @@ There are two cases:
 
 When a fresh asset is being created, its asset group may specify a control asset. Issuance of a new asset is valid if that control asset is present in the same transaction. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
 
-Control assets allow additional, future reissuance of a token, and are themselves assets. If an asset group increases supply (Σout > Σin), the corresponding control asset MUST appear in the same transaction. This requirement applies to both fresh issuance and reissuance. 
+Control assets allow additional, future reissuance of a token, and are themselves assets. If an asset group increases supply (Σout > Σin), the corresponding control asset MUST appear in the same transaction. This requirement applies to both fresh issuance and reissuance.
 
 If an asset did not specify a control asset at genesis, it cannot be reissued and its total supply is forever capped at the amount created in its genesis transaction.
+
+**Control Asset Rules:**
+
+1. **No Self-Reference**: An asset MUST NOT reference itself as its own control asset. A `BY_GROUP` reference where `gidx` equals the current group index is INVALID.
+
+2. **Single-Level Control**: Only the direct control asset is required for reissuance or metadata updates. Control is NOT transitive - if Asset A is controlled by Asset B, and Asset B is controlled by Asset C, reissuing Asset A requires only Asset B (not C).
+
+3. **Supply Finalization**: Burning the control asset (explicitly or by not including it in outputs) permanently locks the controlled asset's supply and prevents future metadata updates. This is intentional behavior for finalizing an asset's supply. Existing tokens continue to circulate normally.
 
 Arkade Asset V1 supports projecting multiple assets unto a single UTXO, and BTC amounts are orthogonal and not included in asset accounting.
 
@@ -49,6 +57,8 @@ Asset amounts are atomic units, and supply management is managed through UTXO sp
 ## 2. OP\_RETURN structure
 
 Exactly **one OP\_RETURN output** must contain the Arkade Asset protocol packet, prefixed with magic bytes. The packet itself is a top-level TLV (Type-Length-Value) stream, allowing multiple data types to coexist within a single transaction.
+
+**Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
 
 ```
 scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
@@ -129,6 +139,7 @@ Instead of using a type marker for each optional field within a `Group` (`AssetI
 -   `bit 0 (0x01)`: `AssetId` is present.
 -   `bit 1 (0x02)`: `Issuance` is present (genesis only).
 -   `bit 2 (0x04)`: `Metadata` is present (update only).
+-   `bits 3-7`: Reserved for future protocol extensions. Parsers MUST ignore these bits if set.
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
 
@@ -149,11 +160,15 @@ AssetRef  := oneof {
                0x01 BY_ID    { assetid: AssetId } # if existing asset
              | 0x02 BY_GROUP { gidx: u16 } # if fresh asset (does not exist yet therefore no AssetId)
              }
+# BY_GROUP forward references are ALLOWED - gidx may reference a group that appears
+# later in the packet. Validators must use two-pass processing to resolve references.
 
 AssetInput := oneof {
                0x01 LOCAL    { i: u16, amt: u64 }                    # input from same transaction's prevouts
-             | 0x02 TELEPORT { commitment: bytes32, amt: u64 }       # input from external teleport via commitment 
+             | 0x02 TELEPORT { amt: u64, witness: TeleportWitness }  # input from teleport; commitment = sha256(witness)
              }
+
+TeleportWitness := varint(script_len) || payment_script || varint(nonce_len) || nonce
 
 AssetOutput := oneof {
                0x01 LOCAL    { o: u16, amt: u64 }                    # output within same transaction
@@ -161,6 +176,11 @@ AssetOutput := oneof {
              }
 
 TeleportCommitment := sha256(payment_script || nonce)
+
+# Nonce specification:
+#   - Size: arbitrary length, up to 32 bytes maximum
+#   - Generation: CSPRNG or deterministic derivation (e.g., HMAC from secret + counter) suggested
+#   - Uniqueness: Implementation concern, not protocol-enforced
 ```
 This hybrid approach balances compactness for the `Group` structure with the flexibility of type markers for variant data types.
 
@@ -189,10 +209,14 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
 
 2. **Claiming a Teleport Input**:
    - Receiver creates a transaction with an output containing the `payment_script`
-   - References the teleport via `AssetInput::TELEPORT { commitment, amt }`
-   - Must provide proof in witness: `{ payment_script, nonce }`
+   - References the teleport via `AssetInput::TELEPORT { amt, witness }` (commitment derived from witness)
+   - The `witness` field contains the preimage data, encoded as:
+     ```
+     TeleportWitness := varint(script_len) || payment_script || varint(nonce_len) || nonce
+     ```
+   - This length-prefixed format enables Arkade Script introspection and future extensibility
    - The teleported assets MUST be assigned, in aggregate amount, to one or more LOCAL outputs whose `scriptPubKey` equals the committed `payment_script`. Indexers MUST verify the sum across those outputs >= claimed amount.
-   - Arkade Signer (offchain) / Indexer (onchain) validates: 
+   - Arkade Signer (offchain) / Indexer (onchain) validates:
      - `sha256(payment_script || nonce) == commitment`
      - Transaction contains at least one output with the exact `payment_script`
      - Commitment matches an entry in pending teleports with the correct `source_txid`
@@ -200,9 +224,13 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
 
 3. **Validation Rules**:
    - Arkade Signer (offchain) / Indexer (onchain) tracks pending teleports via commitment hash.
+   - **Zero Amount Validation**: All asset amounts MUST be greater than zero. An input or output with `amount = 0` is INVALID.
+   - **Input Amount Validation**: Validators MUST verify that declared input amounts match the actual asset balances of referenced UTXOs. A packet claiming more tokens than a UTXO contains is INVALID.
+   - **Output Index Validation**: Output indices MUST reference valid transaction outputs. Out-of-bounds indices render the transaction INVALID.
    - **Lifecycle & Claiming Rules**:
-     - **Arkade-Native Teleport**: If a teleport is created by an *arkade* transaction, it is instantly claimable by **any** other transaction (arkade or onchain). No confirmation delay is required.
-     - **Onchain Teleport**: If a teleport is created by an *onchain* transaction, it can be claimed by **any** other transaction (arkade or onchain) after a minimum number of block confirmations (e.g., 6 blocks). This delay protects against reorg attacks.
+     - **Arkade-Native Teleport (source)**: No confirmation delay on the source. Claimable immediately by an arkade transaction (instant finality), or by an on-chain transaction (finality after 6 confirmations).
+     - **On-chain Teleport (source)**: Source must have `TELEPORT_MIN_CONFIRMATIONS = 6` block confirmations before claims are valid. This protects against reorg attacks.
+     - **Claim finality**: Arkade claims are instant. On-chain claims are final after 6 block confirmations.
    - When a teleport input is claimed, the Signer/Indexer also verifies:
      - The source transaction exists and has the corresponding teleport output.
      - The claiming transaction has an output with the matching `payment_script`.
@@ -210,10 +238,9 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
    - Unclaimed teleports remain pending until claimed.
    - **Competing Claims**: In scenarios where multiple transactions attempt to claim the same teleport, the first valid claim to be processed wins. This implies:
      - An arkade transaction will always win against a competing onchain transaction, as it is processed faster.
+     - If two arkade transactions compete for the same teleport, Arkade processes them in receipt order (first-received wins). The ordering is deterministic and final.
      - If two onchain transactions compete, the one in the earlier mined block wins.
      - If two onchain transactions compete and are mined in the same block, the one with the lowest index in the block wins.
-     
-
 
 ### Teleport State Tracking
 

@@ -2,7 +2,7 @@
 // Generate a transaction JSON embedding an ArkAsset OP_RETURN.
 // Supports --example=A (predefined) or --groups=file.json (custom JSON groups).
 
-import { buildOpReturnScript, bufToHex, Packet } from './arkass-codec';
+import { buildOpReturnScript, bufToHex, Packet } from './arkade-assets-codec';
 
 interface TxVout {
   n: number;

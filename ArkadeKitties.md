@@ -12,8 +12,8 @@ The entire system is trustless. Ownership is enforced by the Ark protocol, and a
 
 Each ArkadeKitty is a unique Arkade Asset with an amount of 1. The asset is non-fungible and can be owned and transferred like any other asset on the network.
 
-- **Species Control via Presence-Only Enforcement**: All Kitties share the same control asset (the "Species Control" asset). Under the current spec and tools, control is presence-only: the Species Control group must be present somewhere in the transaction, but Δ=0 retention or re-locking is not required. Output introspection is still used to verify the child Kitty's properties (metadata, NFT amount, etc.).
-- **Species Control Asset**: A single control asset defines the species. Every Kitty's group MUST set `control` to this exact `assetId`. Transactions that mint or reissue Kitties MUST include the Species Control group (presence-only). Minting the control and the controlled asset in the same transaction is allowed by spec and supported by the tools.
+- **Species Control via Delta Enforcement**: All Kitties share the same control asset (the "Species Control" asset). The Species Control group must be present in any breeding transaction with `delta == 0` (no minting or burning of the control asset itself). This ensures the control asset is retained and can authorize future breeding operations.
+- **Species Control Asset**: A single control asset defines the species. Every Kitty's group MUST set `control` to this exact `assetId`. Transactions that mint or reissue Kitties MUST include the Species Control group with `delta == 0`. Minting the control and the controlled asset in the same transaction is allowed by spec and supported by the tools.
 - **Genesis Asset (optional lore)**: A special "Genesis Kitty" can still exist as the first Kitty minted under the Species Control. Its `assetId` may be referenced off-chain for lore/UX, but authorization is strictly enforced by the Species Control.
 
 - **Provenance Verification**: To prevent counterfeit assets, the `BreedKitties` contract enforces that any parent Kitty (and any child) sets its `control` reference to the Species Control `assetId`. Any asset with a different or missing control reference cannot be used for breeding and cannot be minted by the contract.
@@ -172,8 +172,8 @@ contract BreedCommit(
         require(sireGroup != null && dameGroup != null, "Sire and Dame assets must be spent");
         require(sireGroup.control == speciesControlId, "Sire not Species-Controlled");
         require(dameGroup.control == speciesControlId, "Dame not Species-Controlled");
-        require(sireGroup.metadataHash == computeKittyMetadataRoot(sireGenome, sireGenerationBE8), "Sire metadata hash mismatch");
-        require(dameGroup.metadataHash == computeKittyMetadataRoot(dameGenome, dameGenerationBE8), "Dame metadata hash mismatch");
+        require(sireGroup.inputMetadataHash == computeKittyMetadataRoot(sireGenome, sireGenerationBE8), "Sire metadata hash mismatch");
+        require(dameGroup.inputMetadataHash == computeKittyMetadataRoot(dameGenome, dameGenerationBE8), "Dame metadata hash mismatch");
 
         // 2. Verify Species Control asset is present and retained
         let speciesGroup = tx.assetGroups.find(speciesControlId);
@@ -228,6 +228,7 @@ contract BreedReveal(
         kittyOutputIndex: int,
         sireOutputIndex: int,
         dameOutputIndex: int,
+        speciesControlOutputIndex: int,
     ) {
         // 1. Verify the user's salt
         require(sha256(salt) == saltHash, "Invalid salt");
@@ -237,7 +238,12 @@ contract BreedReveal(
         let commitOutpoint = tx.input.current.outpoint;
         require(checkDataSig(oracleSig, sha256(commitOutpoint + oracleRand), oracle), "Invalid oracle signature");
 
-        // 3. Find the new Kitty's asset group
+        // 3. Verify Species Control is present and retained (delta == 0)
+        let speciesGroup = tx.assetGroups.find(speciesControlId);
+        require(speciesGroup != null && speciesGroup.delta == 0, "Species Control must be present and retained");
+        require(tx.outputs[speciesControlOutputIndex].assets.lookup(speciesControlId) == 1, "Species Control not in output");
+
+        // 4. Find the new Kitty's asset group
         let newKittyGroup = tx.assetGroups.find(newKittyId);
         require(newKittyGroup != null, "New Kitty asset group not found");
         require(newKittyGroup.isFresh && newKittyGroup.delta == 1, "Child must be a fresh NFT");
@@ -246,23 +252,31 @@ contract BreedReveal(
         require(newKittyOutput.assets.lookup(newKittyId) == 1, "New Kitty not locked in output");
         require(newKittyOutput.scriptPubKey == newKittyOwner, "New Kitty must be sent to a P2PKH address");
 
-        // 4. Generate the unpredictable genome and expected metadata hash
+        // 5. Generate the unpredictable genome and expected metadata hash
         let entropy = sha256(salt + oracleRand);
         let newGenome = mixGenomes(sireGenome, dameGenome, entropy);
         let expectedMetadataHash = computeKittyMetadataRoot(newGenome, computeChildGeneration(sireGenerationBE8, dameGenerationBE8));
 
-        // 5. Enforce all Kitty creation rules
-        require(newKittyGroup.metadataHash == expectedMetadataHash, "Child metadata hash mismatch");
+        // 6. Enforce all Kitty creation rules (use outputMetadataHash for the new asset)
+        require(newKittyGroup.outputMetadataHash == expectedMetadataHash, "Child metadata hash mismatch");
 
     }
 
     // If the reveal doesn't happen, allow parents to be reclaimed.
-    function refund(dameOutputIndex: int, sireOutputIndex: int) {
+    function refund(dameOutputIndex: int, sireOutputIndex: int, speciesControlOutputIndex: int) {
         // 1. Check that the timeout has passed
-        require(tx.time >= expirationTime, "Timeout not yet reached");
+        require(tx.locktime >= expirationTime, "Timeout not yet reached");
 
-        require(tx.outputs[sireOutputIndex].assets.lookup(sireId) == 1, "Sire not refunded to owner");
-        require(tx.outputs[dameOutputIndex].assets.lookup(dameId) == 1, "Dame not refunded to owner");
+        // 2. Verify parents are returned to their owners
+        require(tx.outputs[sireOutputIndex].assets.lookup(sireId) == 1, "Sire not refunded");
+        require(tx.outputs[sireOutputIndex].scriptPubKey == sireOwner, "Sire not refunded to owner");
+        require(tx.outputs[dameOutputIndex].assets.lookup(dameId) == 1, "Dame not refunded");
+        require(tx.outputs[dameOutputIndex].scriptPubKey == dameOwner, "Dame not refunded to owner");
+
+        // 3. Verify Species Control is retained (delta == 0)
+        let speciesGroup = tx.assetGroups.find(speciesControlId);
+        require(speciesGroup != null && speciesGroup.delta == 0, "Species Control must be retained");
+        require(tx.outputs[speciesControlOutputIndex].assets.lookup(speciesControlId) == 1, "Species Control not in output");
     }
 
 }

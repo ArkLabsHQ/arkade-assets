@@ -79,10 +79,15 @@ export interface AssetInputLocal {
   amt: string | bigint;
 }
 
+export interface TeleportWitness {
+  paymentScript: string;  // hex
+  nonce: string;          // hex
+}
+
 export interface AssetInputTeleport {
   type: 'TELEPORT';
-  commitment: string;
   amt: string | bigint;
+  witness: TeleportWitness;  // Required - commitment derived as sha256(paymentScript || nonce)
 }
 
 export type AssetInput = AssetInputLocal | AssetInputTeleport;
@@ -328,6 +333,53 @@ export function encodeMetadataMap(map: MetadataMap): Uint8Array {
   return concatBytes(...bufs);
 }
 
+/**
+ * Encodes a TeleportWitness in length-prefixed format:
+ * varint(script_len) || payment_script || varint(nonce_len) || nonce
+ */
+export function encodeTeleportWitness(witness: TeleportWitness): Uint8Array {
+  const scriptBytes = hexToBytes(witness.paymentScript);
+  const nonceBytes = hexToBytes(witness.nonce);
+
+  if (nonceBytes.length > 32) {
+    throw new Error('Teleport nonce must be at most 32 bytes');
+  }
+
+  return concatBytes(
+    encodeVarUint(scriptBytes.length),
+    scriptBytes,
+    encodeVarUint(nonceBytes.length),
+    nonceBytes
+  );
+}
+
+/**
+ * Decodes a TeleportWitness from length-prefixed format.
+ */
+export function decodeTeleportWitness(buf: Uint8Array, off: number): { witness: TeleportWitness; next: number } {
+  let cursor = off;
+
+  // Decode script length and script
+  const scriptLen = decodeVarUint(buf, cursor);
+  cursor += scriptLen.size;
+  const scriptBytes = buf.slice(cursor, cursor + scriptLen.value);
+  cursor += scriptLen.value;
+
+  // Decode nonce length and nonce
+  const nonceLen = decodeVarUint(buf, cursor);
+  cursor += nonceLen.size;
+  const nonceBytes = buf.slice(cursor, cursor + nonceLen.value);
+  cursor += nonceLen.value;
+
+  return {
+    witness: {
+      paymentScript: bytesToHex(scriptBytes),
+      nonce: bytesToHex(nonceBytes)
+    },
+    next: cursor
+  };
+}
+
 function encodeAssetInput(input: AssetInput): Uint8Array {
   if (input.type === 'LOCAL') {
     const buf = new Uint8Array(11);
@@ -336,11 +388,13 @@ function encodeAssetInput(input: AssetInput): Uint8Array {
     new DataView(buf.buffer).setBigUint64(3, BigInt(input.amt), true);
     return buf;
   } else if (input.type === 'TELEPORT') {
-    const buf = new Uint8Array(41);
-    buf[0] = 0x02;
-    buf.set(hexToBytes(input.commitment), 1);
-    new DataView(buf.buffer).setBigUint64(33, BigInt(input.amt), true);
-    return buf;
+    // Format: type(1) + amt(8) + witness(variable)
+    // Commitment is derived from witness as sha256(paymentScript || nonce)
+    const baseBuf = new Uint8Array(9);
+    baseBuf[0] = 0x02;
+    new DataView(baseBuf.buffer).setBigUint64(1, BigInt(input.amt), true);
+    const witnessBuf = encodeTeleportWitness(input.witness);
+    return concatBytes(baseBuf, witnessBuf);
   }
   throw new Error(`Unknown input type: ${(input as any).type}`);
 }
@@ -497,11 +551,12 @@ function decodeAssetInput(buf: Uint8Array, off: number): { input: AssetInput; ne
     const amt = view.getBigUint64(3, Config.u64LE);
     return { input: { type: 'LOCAL', i, amt: amt.toString() }, next: off + 11 };
   } else if (inputType === 0x02) { // TELEPORT
-    if (off + 41 > buf.length) throw new Error('decodeAssetInput TELEPORT OOB');
-    const commitment = bytesToHex(buf.slice(off + 1, off + 33));
+    // Format: type(1) + amt(8) + witness(variable)
+    if (off + 9 > buf.length) throw new Error('decodeAssetInput TELEPORT OOB');
     const view = new DataView(buf.buffer, buf.byteOffset + off);
-    const amt = view.getBigUint64(33, Config.u64LE);
-    return { input: { type: 'TELEPORT', commitment, amt: amt.toString() }, next: off + 41 };
+    const amt = view.getBigUint64(1, Config.u64LE);
+    const { witness, next } = decodeTeleportWitness(buf, off + 9);
+    return { input: { type: 'TELEPORT', amt: amt.toString(), witness }, next };
   }
   throw new Error(`Unknown input type: ${inputType}`);
 }
@@ -597,4 +652,142 @@ export function parseOpReturnScript(buf: Uint8Array): Packet | null {
     console.error('Error parsing OP_RETURN script:', e);
     return null;
   }
+}
+
+// ----------------- METADATA MERKLE HASH -----------------
+
+/**
+ * Computes a SHA256 hash using the Web Crypto API (browser) or Node.js crypto.
+ * For synchronous use in Node.js, we use a simple implementation.
+ */
+let sha256Sync: (data: Uint8Array) => Uint8Array;
+
+// Try to use @noble/hashes if available, otherwise fall back to a simple implementation
+try {
+  // Dynamic import for @noble/hashes
+  const { sha256 } = require('@noble/hashes/sha256');
+  sha256Sync = sha256;
+} catch {
+  // Fallback: use Node.js crypto if available
+  try {
+    const crypto = require('crypto');
+    sha256Sync = (data: Uint8Array): Uint8Array => {
+      const hash = crypto.createHash('sha256');
+      hash.update(data);
+      return new Uint8Array(hash.digest());
+    };
+  } catch {
+    // No crypto available - will throw at runtime if used
+    sha256Sync = (_: Uint8Array): Uint8Array => {
+      throw new Error('No SHA256 implementation available. Install @noble/hashes or use Node.js.');
+    };
+  }
+}
+
+/**
+ * Computes the leaf hash for a single metadata key-value pair.
+ * leaf = sha256(varuint(len(key)) || key || varuint(len(value)) || value)
+ */
+export function computeMetadataLeafHash(key: string, value: string): Uint8Array {
+  const keyBytes = textEncoder.encode(key);
+  const valueBytes = textEncoder.encode(value);
+  const data = concatBytes(
+    encodeVarUint(keyBytes.length),
+    keyBytes,
+    encodeVarUint(valueBytes.length),
+    valueBytes
+  );
+  return sha256Sync(data);
+}
+
+/**
+ * Computes the Merkle root of a metadata map.
+ * Keys are sorted lexicographically before hashing.
+ * Returns a 32-byte hash.
+ */
+export function computeMetadataMerkleRoot(metadata: MetadataMap): Uint8Array {
+  const keys = Object.keys(metadata).sort();
+
+  if (keys.length === 0) {
+    // Empty metadata - return hash of empty string
+    return sha256Sync(new Uint8Array(0));
+  }
+
+  // Compute leaf hashes
+  let leaves = keys.map(key => computeMetadataLeafHash(key, metadata[key]));
+
+  // Build Merkle tree
+  while (leaves.length > 1) {
+    const nextLevel: Uint8Array[] = [];
+    for (let i = 0; i < leaves.length; i += 2) {
+      if (i + 1 < leaves.length) {
+        // Hash pair
+        nextLevel.push(sha256Sync(concatBytes(leaves[i], leaves[i + 1])));
+      } else {
+        // Odd leaf - promote to next level
+        nextLevel.push(leaves[i]);
+      }
+    }
+    leaves = nextLevel;
+  }
+
+  return leaves[0];
+}
+
+/**
+ * Computes the Merkle root and returns it as a hex string.
+ */
+export function computeMetadataMerkleRootHex(metadata: MetadataMap): string {
+  return bytesToHex(computeMetadataMerkleRoot(metadata));
+}
+
+// ----------------- TELEPORT COMMITMENT -----------------
+
+/**
+ * Computes a teleport commitment hash.
+ * commitment = sha256(payment_script || nonce)
+ * @param paymentScript - The payment script as bytes
+ * @param nonce - Nonce (up to 32 bytes)
+ */
+export function computeTeleportCommitment(paymentScript: Uint8Array, nonce: Uint8Array): Uint8Array {
+  if (nonce.length > 32) {
+    throw new Error('Teleport nonce must be at most 32 bytes');
+  }
+  return sha256Sync(concatBytes(paymentScript, nonce));
+}
+
+/**
+ * Computes a teleport commitment and returns it as a hex string.
+ */
+export function computeTeleportCommitmentHex(paymentScript: Uint8Array, nonce: Uint8Array): string {
+  return bytesToHex(computeTeleportCommitment(paymentScript, nonce));
+}
+
+/**
+ * Verifies a teleport commitment against the provided preimage.
+ */
+export function verifyTeleportCommitment(
+  commitment: Uint8Array,
+  paymentScript: Uint8Array,
+  nonce: Uint8Array
+): boolean {
+  const computed = computeTeleportCommitment(paymentScript, nonce);
+  return bytesEqual(commitment, computed);
+}
+
+/**
+ * Gets the commitment hash from a TeleportWitness.
+ * commitment = sha256(paymentScript || nonce)
+ */
+export function getWitnessCommitment(witness: TeleportWitness): string {
+  const scriptBytes = hexToBytes(witness.paymentScript);
+  const nonceBytes = hexToBytes(witness.nonce);
+  return computeTeleportCommitmentHex(scriptBytes, nonceBytes);
+}
+
+/**
+ * Gets the commitment hash from a TELEPORT input.
+ */
+export function getTeleportInputCommitment(input: AssetInputTeleport): string {
+  return getWitnessCommitment(input.witness);
 }

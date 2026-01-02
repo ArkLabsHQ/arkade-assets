@@ -26,19 +26,27 @@ Each Arkade Asset V1 packet, embedded in a Bitcoin output via OP_RETURN semantic
 Assets are identified by an Asset ID, which is always a pair: `AssetId: (genesis_txid, group_index)`
 
 - `genesis_txid` = the transaction where the asset was first minted
-- `group_index` = the idnex of the asset group inside that genesis transaction
+- `group_index` = the index of the asset group inside that genesis transaction
 
 There are two cases: 
-- **Fresh mint**. If an Asset Group omits its Asset Id, it creates a new asset. It's Asset ID is `(this_txid, group_index)`, where `this_txid`is the current transaction hash. Since this is the genesis transaction for that asset, `this_txid = genesis_txid`.
+- **Fresh mint**. If an Asset Group omits its Asset ID, it creates a new asset. It's Asset ID is `(this_txid, group_index)`, where `this_txid`is the current transaction hash. Since this is the genesis transaction for that asset, `this_txid = genesis_txid`.
 - **Existing asset**. If the Asset Group specifies an Asset ID, it refers back to an already minted asset `(genesis_txid, group_index)`  
 
 ### Control Assets and Reissuance
 
 When a fresh asset is being created, its asset group may specify a control asset. Issuance of a new asset is valid if that control asset is present in the same transaction. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
 
-Control assets allow additional, future reissuance of a token, and are themselves assets. If an asset group increases supply (Σout > Σin), the corresponding control asset MUST appear in the same transaction. This requirement applies to both fresh issuance and reissuance. 
+Control assets allow additional, future reissuance of a token, and are themselves assets. If an asset group increases supply (Σout > Σin), the corresponding control asset MUST appear in the same transaction. This requirement applies to both fresh issuance and reissuance.
 
 If an asset did not specify a control asset at genesis, it cannot be reissued and its total supply is forever capped at the amount created in its genesis transaction.
+
+**Control Asset Rules:**
+
+1. **No Self-Reference**: An asset MUST NOT reference itself as its own control asset. A `BY_GROUP` reference where `gidx` equals the current group index is INVALID.
+
+2. **Single-Level Control**: Only the direct control asset is required for reissuance or metadata updates. Control is NOT transitive - if Asset A is controlled by Asset B, and Asset B is controlled by Asset C, reissuing Asset A requires only Asset B (not C).
+
+3. **Supply Finalization**: Burning the control asset (explicitly or by not including it in outputs) permanently locks the controlled asset's supply and prevents future metadata updates. This is intentional behavior for finalizing an asset's supply. Existing tokens continue to circulate normally.
 
 Arkade Asset V1 supports projecting multiple assets unto a single UTXO, and BTC amounts are orthogonal and not included in asset accounting.
 
@@ -49,6 +57,8 @@ Asset amounts are atomic units, and supply management is managed through UTXO sp
 ## 2. OP\_RETURN structure
 
 Exactly **one OP\_RETURN output** must contain the Arkade Asset protocol packet, prefixed with magic bytes. The packet itself is a top-level TLV (Type-Length-Value) stream, allowing multiple data types to coexist within a single transaction.
+
+**Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
 
 ```
 scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
@@ -107,7 +117,7 @@ Issuance := {
 
 - **Genesis (Fresh Assets)**: The `Issuance` property is **only allowed** when creating a fresh asset (i.e., when `AssetId` is absent). It defines the initial control policy and metadata.
   - If `Issuance.Immutable` is set to `true`, the asset's metadata can never be changed.
-  - The `Metadata` property **must not** be present at genesis.
+  - Initial Metadata is set via `Issuance.Metadata`. The `Group.Metadata` property **must not** be present at genesis.
   - If `Issuance.ControlAsset` is omitted, no future token reissuance is possible. 
 
 - **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
@@ -129,6 +139,7 @@ Instead of using a type marker for each optional field within a `Group` (`AssetI
 -   `bit 0 (0x01)`: `AssetId` is present.
 -   `bit 1 (0x02)`: `Issuance` is present (genesis only).
 -   `bit 2 (0x04)`: `Metadata` is present (update only).
+-   `bits 3-7`: Reserved for future protocol extensions. Parsers MUST ignore these bits if set.
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
 
@@ -149,11 +160,15 @@ AssetRef  := oneof {
                0x01 BY_ID    { assetid: AssetId } # if existing asset
              | 0x02 BY_GROUP { gidx: u16 } # if fresh asset (does not exist yet therefore no AssetId)
              }
+# BY_GROUP forward references are ALLOWED - gidx may reference a group that appears
+# later in the packet. Validators must use two-pass processing to resolve references.
 
 AssetInput := oneof {
                0x01 LOCAL    { i: u16, amt: u64 }                    # input from same transaction's prevouts
-             | 0x02 TELEPORT { commitment: bytes32, amt: u64 }       # input from external teleport via commitment 
+             | 0x02 TELEPORT { amt: u64, witness: TeleportWitness }  # input from teleport; commitment = sha256(witness)
              }
+
+TeleportWitness := varint(script_len) || payment_script || varint(nonce_len) || nonce
 
 AssetOutput := oneof {
                0x01 LOCAL    { o: u16, amt: u64 }                    # output within same transaction
@@ -161,6 +176,11 @@ AssetOutput := oneof {
              }
 
 TeleportCommitment := sha256(payment_script || nonce)
+
+# Nonce specification:
+#   - Size: arbitrary length, up to 32 bytes maximum
+#   - Generation: CSPRNG or deterministic derivation (e.g., HMAC from secret + counter) suggested
+#   - Uniqueness: Implementation concern, not protocol-enforced
 ```
 This hybrid approach balances compactness for the `Group` structure with the flexibility of type markers for variant data types.
 
@@ -189,10 +209,14 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
 
 2. **Claiming a Teleport Input**:
    - Receiver creates a transaction with an output containing the `payment_script`
-   - References the teleport via `AssetInput::TELEPORT { commitment, amt }`
-   - Must provide proof in witness: `{ payment_script, nonce }`
+   - References the teleport via `AssetInput::TELEPORT { amt, witness }` (commitment derived from witness)
+   - The `witness` field contains the preimage data, encoded as:
+     ```
+     TeleportWitness := varint(script_len) || payment_script || varint(nonce_len) || nonce
+     ```
+   - This length-prefixed format enables Arkade Script introspection and future extensibility
    - The teleported assets MUST be assigned, in aggregate amount, to one or more LOCAL outputs whose `scriptPubKey` equals the committed `payment_script`. Indexers MUST verify the sum across those outputs >= claimed amount.
-   - Arkade Signer (offchain) / Indexer (onchain) validates: 
+   - Arkade Signer (offchain) / Indexer (onchain) validates:
      - `sha256(payment_script || nonce) == commitment`
      - Transaction contains at least one output with the exact `payment_script`
      - Commitment matches an entry in pending teleports with the correct `source_txid`
@@ -200,9 +224,13 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
 
 3. **Validation Rules**:
    - Arkade Signer (offchain) / Indexer (onchain) tracks pending teleports via commitment hash.
+   - **Zero Amount Validation**: All asset amounts MUST be greater than zero. An input or output with `amount = 0` is INVALID.
+   - **Input Amount Validation**: Validators MUST verify that declared input amounts match the actual asset balances of referenced UTXOs. A packet claiming more tokens than a UTXO contains is INVALID.
+   - **Output Index Validation**: Output indices MUST reference valid transaction outputs. Out-of-bounds indices render the transaction INVALID.
    - **Lifecycle & Claiming Rules**:
-     - **Arkade-Native Teleport**: If a teleport is created by an *arkade* transaction, it is instantly claimable by **any** other transaction (arkade or onchain). No confirmation delay is required.
-     - **Onchain Teleport**: If a teleport is created by an *onchain* transaction, it can be claimed by **any** other transaction (arkade or onchain) after a minimum number of block confirmations (e.g., 6 blocks). This delay protects against reorg attacks.
+     - **Arkade-Native Teleport (source)**: No confirmation delay on the source. Claimable immediately by an arkade transaction (instant finality), or by an on-chain transaction (finality after 6 confirmations).
+     - **On-chain Teleport (source)**: Source must have `TELEPORT_MIN_CONFIRMATIONS = 6` block confirmations before claims are valid. This protects against reorg attacks.
+     - **Claim finality**: Arkade claims are instant. On-chain claims are final after 6 block confirmations.
    - When a teleport input is claimed, the Signer/Indexer also verifies:
      - The source transaction exists and has the corresponding teleport output.
      - The claiming transaction has an output with the matching `payment_script`.
@@ -210,10 +238,9 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
    - Unclaimed teleports remain pending until claimed.
    - **Competing Claims**: In scenarios where multiple transactions attempt to claim the same teleport, the first valid claim to be processed wins. This implies:
      - An arkade transaction will always win against a competing onchain transaction, as it is processed faster.
+     - If two arkade transactions compete for the same teleport, Arkade processes them in receipt order (first-received wins). The ordering is deterministic and final.
      - If two onchain transactions compete, the one in the earlier mined block wins.
      - If two onchain transactions compete and are mined in the same block, the one with the lowest index in the block wins.
-     
-
 
 ### Teleport State Tracking
 
@@ -444,127 +471,205 @@ This mechanism ensures that Arkade Assets work seamlessly within Arkade's batch 
 
 This document outlines the introspection opcodes available in Arkade Script for interacting with Arkade Assets, along with the high-level API structure and example contracts.
 
-## Introspection Opcodes
-
-All Asset Ids are handled as **two stack items**: `(txid32, gidx_u16)`.
-
-### Basics
-
-- `OP_TXID` → *[out]* `txid32`\
-  *Pushes the txid of the current transaction.*
-
-### Groups
-
-- `OP_INSPECTNUMASSETGROUPS` → *[out]* `K`\
-  *Number of groups in the Arkade AssetV1 packet.*
-- `OP_INSPECTASSETGROUPASSETID k` → *[out]* `assetid_txid32  assetid_gidx_u16`\
-  *Resolved AssetId of group **k**. Fresh groups use **this_txid**.*
-- `OP_INSPECTASSETGROUPCTRL k` → *[out]* `ctrl_txid32  ctrl_gidx_u16 | OP_0`\
-  *Control AssetId if present, else OP_0.*
-- `OP_FINDASSETGROUPBYASSETID assetid_txid32 assetid_gidx_u16` → *[out]* `k | OP_0`\
-  *Find group index for a given AssetId, or OP_0 if absent.*
-
-### Per-group I/O
-- `OP_INSPECTASSETGROUPMETADATAHASH k source_u8` → *[out]* `metadata_hash_bytes32`\
-  *Pushes the metadata hash (Merkle root) of group **k**. `source_u8` determines the source: `0` for the existing metadata (from inputs), `1` for the new metadata (from outputs), and `2` to push both (existing then new).*
-- `OP_INSPECTASSETGROUPNUM k source_u8` → *[out]* `count_u16` or `count_in_u16 count_out_u16`\
-  *Pushes the number of inputs/outputs for group **k**. `source_u8`: `0` for inputs, `1` for outputs, `2` for both (in, then out).*
-- `OP_INSPECTASSETGROUP k j source_u8` → *[out]* `type_u8  data...  amount_u64`\
-  *Retrieve the j-th input/output of group **k**. `source_u8`: `0` for input, `1` for output.*
-- `OP_INSPECTASSETGROUPSUM k source_u8` → *[out]* `sum_u64` or `sum_in_u64 sum_out_u64`\
-  *Pushes the sum of input/output amounts for group **k**. `source_u8`: `0` for inputs, `1` for outputs, `2` for both (in, then out).*
-### Cross-output (multi-asset per UTXO)
-
-- `OP_INSPECTOUTASSETCOUNT o` → *[out]* `n`\
-  *Number of asset entries assigned to output o.*
-- `OP_INSPECTOUTASSETAT o t` → *[out]* `assetid_txid32  assetid_gidx_u16  amount_u64`\
-  *t-th asset and amount assigned to output o.*
-- `OP_INSPECTOUTASSETLOOKUP o assetid_txid32 assetid_gidx_u16` → *[out]* `amount_u64 | OP_0`\
-  *Declared amount for given asset at output o, or OP_0 if none.*
-
-### Cross-input (packet-declared)
-
-- `OP_INSPECTINASSETCOUNT i` → *[out]* `n`\
-  *Number of assets declared for input i.*
-- `OP_INSPECTINASSETAT i t` → *[out]* `assetid_txid32  assetid_gidx_u16  amount_u64`\
-  *t-th asset and amount declared for input i.*
-- `OP_INSPECTINASSETLOOKUP i assetid_txid32 assetid_gidx_u16` → *[out]* `amount_u64 | OP_0`\
-  *Declared amount for given asset at input i, or OP_0 if none.*
-
-### Teleport-specific
-
-- `OP_INSPECTGROUPTELEPORTOUTCOUNT k` → *[out]* `n`\
-  *Number of TELEPORT outputs in group k.*
-- `OP_INSPECTGROUPTELEPORTOUT k j` → *[out]* `txid_32  vout_u32  amount_u64`\
-  *j-th TELEPORT output in group k (target txid, vout, amount).*
-- `OP_INSPECTGROUPTELEPORTINCOUNT k` → *[out]* `n`\
-  *Number of TELEPORT inputs in group k.*
-- `OP_INSPECTGROUPTELEPORTIN k j` → *[out]* `txid_32  vout_u32  amount_u64`\
-  *j-th TELEPORT input in group k (source txid, vout, amount).*
+For base opcodes (transaction introspection, arithmetic, cryptographic, etc.), see [arkd PR #577](https://github.com/arkade-os/arkd/pull/577).
 
 ---
 
-## Asset Introspection API
+## Arkade Asset Introspection Opcodes
 
-Arkade Assets extend Arkade Script with asset-specific introspection, following a pattern similar to other smart contract languages:
+These opcodes provide access to the Arkade Asset V1 packet embedded in the transaction.
+
+All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
+
+### Packet & Groups
+
+| Opcode | Stack Effect | Description |
+|--------|--------------|-------------|
+| `OP_INSPECTNUMASSETGROUPS` | → `K` | Number of groups in the Arkade Asset packet |
+| `OP_INSPECTASSETGROUPASSETID` `k` | → `txid32 gidx_u16` | Resolved AssetId of group `k`. Fresh groups use `this_txid`. |
+| `OP_INSPECTASSETGROUPCTRL` `k` | → `-1` \| `txid32 gidx_u16` | Control AssetId if present, else -1 |
+| `OP_FINDASSETGROUPBYASSETID` `txid32 gidx_u16` | → `-1` \| `k` | Find group index, or -1 if absent |
+
+### Per-Group Metadata
+
+| Opcode | Stack Effect | Description |
+|--------|--------------|-------------|
+| `OP_INSPECTASSETGROUPMETADATAHASH` `k source_u8` | → `hash32` | Metadata Merkle root. `source`: 0=input (existing), 1=output (new), 2=both |
+
+### Per-Group Inputs/Outputs
+
+| Opcode | Stack Effect | Description |
+|--------|--------------|-------------|
+| `OP_INSPECTASSETGROUPNUM` `k source_u8` | → `count_u16` or `in_u16 out_u16` | Count of inputs/outputs. `source`: 0=inputs, 1=outputs, 2=both |
+| `OP_INSPECTASSETGROUP` `k j source_u8` | → `type_u8 data... amount_u64` | j-th input/output of group `k`. `source`: 0=input, 1=output |
+| `OP_INSPECTASSETGROUPSUM` `k source_u8` | → `sum_u64` or `in_u64 out_u64` | Sum of amounts. `source`: 0=inputs, 1=outputs, 2=both |
+
+**`OP_INSPECTASSETGROUP` return values by type:**
+
+| Type | `type_u8` | Additional Data |
+|------|-----------|-----------------|
+| LOCAL input | `0x01` | `input_index_u16 amount_u64` |
+| TELEPORT input | `0x02` | `payment_script nonce amount_u64` |
+| LOCAL output | `0x01` | `output_index_u16 amount_u64` |
+| TELEPORT output | `0x02` | `commitment_32 amount_u64` |
+
+**Note:** TELEPORT inputs return the full witness (payment_script, nonce) since the packet contains the preimage. TELEPORT outputs only return the commitment since the witness is not yet revealed.
+
+### Cross-Output (Multi-Asset per UTXO)
+
+| Opcode | Stack Effect | Description |
+|--------|--------------|-------------|
+| `OP_INSPECTOUTASSETCOUNT` `o` | → `n` | Number of asset entries assigned to output `o` |
+| `OP_INSPECTOUTASSETAT` `o t` | → `txid32 gidx_u16 amount_u64` | t-th asset at output `o` |
+| `OP_INSPECTOUTASSETLOOKUP` `o txid32 gidx_u16` | → `amount_u64` \| `-1` | Amount of asset at output `o`, or -1 if not found |
+
+### Cross-Input (Packet-Declared)
+
+| Opcode | Stack Effect | Description |
+|--------|--------------|-------------|
+| `OP_INSPECTINASSETCOUNT` `i` | → `n` | Number of assets declared for input `i` |
+| `OP_INSPECTINASSETAT` `i t` | → `txid32 gidx_u16 amount_u64` | t-th asset declared for input `i` |
+| `OP_INSPECTINASSETLOOKUP` `i txid32 gidx_u16` | → `amount_u64` \| `-1` | Declared amount for asset at input `i`, or -1 if not found |
+
+### Teleport-Specific
+
+| Opcode | Stack Effect | Description |
+|--------|--------------|-------------|
+| `OP_INSPECTGROUPTELEPORTOUTCOUNT` `k` | → `n` | Number of TELEPORT outputs in group `k` |
+| `OP_INSPECTGROUPTELEPORTOUT` `k j` | → `commitment_32 amount_u64` | j-th TELEPORT output in group `k` |
+| `OP_INSPECTGROUPTELEPORTINCOUNT` `k` | → `n` | Number of TELEPORT inputs in group `k` |
+| `OP_INSPECTGROUPTELEPORTIN` `k j` | → `payment_script nonce amount_u64` | j-th TELEPORT input witness in group `k` |
+
+**Note:** TELEPORT inputs return the full witness (payment_script, nonce) since the packet contains the preimage. The commitment can be computed as `sha256(payment_script || nonce)`.
+
+---
+
+## High-Level API (Arkade Compile Sugar)
+
+The following API provides syntactic sugar for Arkade Script contracts. Each property/method is documented with its translation to underlying opcodes.
+
+### Asset Groups
 
 ```javascript
-// Transaction basics
-tx.txid;                               // maps to OP_TXID
+tx.assetGroups.length      // → OP_INSPECTNUMASSETGROUPS
 
-// Asset Group Introspection
-tx.assetGroups.length;                    // Number of asset groups -> maps to OP_INSPECTNUMASSETGROUPS
-tx.assetGroups.find(AssetId);     // Find a group by asset ID -> maps to OP_FINDASSETGROUPBYASSETID
+tx.assetGroups.find(assetId)
+                           // → OP_FINDASSETGROUPBYASSETID assetId.txid assetId.gidx
+                           //   Returns: group index, or -1 if not found
 
-// AssetGroup Object
-tx.assetGroups[i].assetId;            // Asset ID for this group -> maps to OP_INSPECTASSETGROUPASSETID
-int tx.assetGroups[i].numInputs;              // -> OP_INSPECTASSETGROUPNUM with source 0
-int tx.assetGroups[i].numOutputs;             // -> OP_INSPECTASSETGROUPNUM with source 1
-bigint tx.assetGroups[i].sumInputs;           // -> OP_INSPECTASSETGROUPSUM with source 0
-bigint tx.assetGroups[i].sumOutputs;          // -> OP_INSPECTASSETGROUPSUM with source 1
-tx.assetGroups[i].inputs[j];    // -> OP_INSPECTASSETGROUP k j 0
-tx.assetGroups[i].outputs[j]; // -> OP_INSPECTASSETGROUP k j 1
+tx.assetGroups[k].assetId  // → OP_INSPECTASSETGROUPASSETID k
+                           //   Returns: { txid: bytes32, gidx: int }
 
-// AssetInput Object
-tx.assetGroups[i].inputs[j].type; // LOCAL or TELEPORT
-tx.assetGroups[i].inputs[j].amount;       // Asset amount
-// TELEPORT only:
-tx.assetGroups[i].inputs[j].commitment; // Teleport commitment
+tx.assetGroups[k].isFresh  // → OP_INSPECTASSETGROUPASSETID k
+                           //   OP_DROP OP_TXID OP_EQUAL
+                           //   True if assetId.txid == this_txid (new asset)
 
-// AssetOutput Object
-tx.assetGroups[i].outputs[j].type; // LOCAL or TELEPORT
-tx.assetGroups[i].outputs[j].amount;        // Asset amount
-// TELEPORT only:
-tx.assetGroups[i].outputs[j].commitment;  // Teleport commitment
-// LOCAL only:
-tx.assetGroups[i].outputs[j].scriptPubKey; // Output script (via out_index from OP_INSPECTASSETGROUPOUT + OP_INSPECTOUTPUTSCRIPTPUBKEY)
+tx.assetGroups[k].control  // → OP_INSPECTASSETGROUPCTRL k
+                           //   Returns: AssetId (txid32, gidx_u16), or -1 if no control
 
-// Enum Types
-enum AssetInputType { LOCAL, TELEPORT }
-enum AssetOutputType { LOCAL, TELEPORT }
+// Metadata hashes
+tx.assetGroups[k].inputMetadataHash
+                           // → OP_INSPECTASSETGROUPMETADATAHASH k 0
+                           //   Metadata hash from inputs (existing state)
 
-// Cross-input lookups (packet-declared)
-tx.inputs[i].assets.length;               // maps to OP_INSPECTINASSETCOUNT
-tx.inputs[i].assets[j].assetId;          // maps to OP_INSPECTINASSETAT (asset id part)
-tx.inputs[i].assets[j].amount;           // maps to OP_INSPECTINASSETAT (amount part)
-tx.inputs[i].assets.lookup(AssetId);     // maps to OP_INSPECTINASSETLOOKUP (amount | 0)
+tx.assetGroups[k].outputMetadataHash
+                           // → OP_INSPECTASSETGROUPMETADATAHASH k 1
+                           //   Metadata hash for outputs (new state)
 
-// AssetGroup lineage pointer (control asset reference)
-tx.assetGroups[i].control;                 // maps to OP_INSPECTASSETGROUPCTRL
+// Counts
+tx.assetGroups[k].numInputs
+                           // → OP_INSPECTASSETGROUPNUM k 0
 
-// Output introspection (multi-asset per UTXO)
-tx.outputs.length;                           // number of transaction outputs
-tx.outputs[i].scriptPubKey;                  // maps to OP_INSPECTOUTPUTSCRIPTPUBKEY
-tx.outputs[i].assets.length;                 // maps to OP_INSPECTOUTASSETCOUNT
-tx.outputs[i].assets[j].assetId;          // maps to OP_INSPECTOUTASSETAT (asset id part)
-tx.outputs[i].assets[j].amount;           // maps to OP_INSPECTOUTASSETAT (amount part)
-tx.outputs[i].assets.lookup(AssetId);     // maps to OP_INSPECTOUTASSETLOOKUP (amount | 0)
+tx.assetGroups[k].numOutputs
+                           // → OP_INSPECTASSETGROUPNUM k 1
+
+// Sums
+tx.assetGroups[k].sumInputs
+                           // → OP_INSPECTASSETGROUPSUM k 0
+
+tx.assetGroups[k].sumOutputs
+                           // → OP_INSPECTASSETGROUPSUM k 1
+
+// Computed: delta = sumOutputs - sumInputs
+tx.assetGroups[k].delta    // → OP_INSPECTASSETGROUPSUM k 2 OP_SUB64
+                           //   Positive = mint, Negative = burn, Zero = transfer
+
+// Per-group inputs/outputs
+tx.assetGroups[k].inputs[j]
+                           // → OP_INSPECTASSETGROUP k j 0
+                           //   Returns: AssetInput object
+
+tx.assetGroups[k].outputs[j]
+                           // → OP_INSPECTASSETGROUP k j 1
+                           //   Returns: AssetOutput object
 ```
 
-### Asset Types and Structures
+### Asset Inputs/Outputs
 
 ```javascript
-// Asset ID type
+// AssetInput (from OP_INSPECTASSETGROUP k j 0)
+tx.assetGroups[k].inputs[j].type       // LOCAL (0x01) or TELEPORT (0x02)
+tx.assetGroups[k].inputs[j].amount     // Asset amount (u64)
+
+// LOCAL input additional fields:
+tx.assetGroups[k].inputs[j].inputIndex // Transaction input index (u16)
+
+// TELEPORT input additional fields:
+tx.assetGroups[k].inputs[j].paymentScript // Payment script (bytes)
+tx.assetGroups[k].inputs[j].nonce      // Teleport nonce (bytes32)
+tx.assetGroups[k].inputs[j].commitment // → sha256(paymentScript || nonce)
+
+// AssetOutput (from OP_INSPECTASSETGROUP k j 1)
+tx.assetGroups[k].outputs[j].type       // LOCAL (0x01) or TELEPORT (0x02)
+tx.assetGroups[k].outputs[j].amount     // Asset amount (u64)
+
+// LOCAL output additional fields:
+tx.assetGroups[k].outputs[j].outputIndex // Transaction output index (u16)
+tx.assetGroups[k].outputs[j].scriptPubKey
+                           // → OP_INSPECTASSETGROUP k j 1
+                           //   (extract output index)
+                           //   OP_INSPECTOUTPUTSCRIPTPUBKEY
+
+// TELEPORT output additional fields:
+tx.assetGroups[k].outputs[j].commitment // Teleport commitment (bytes32)
+```
+
+### Cross-Input Asset Lookups
+
+```javascript
+tx.inputs[i].assets.length
+                           // → OP_INSPECTINASSETCOUNT i
+
+tx.inputs[i].assets[t].assetId
+tx.inputs[i].assets[t].amount
+                           // → OP_INSPECTINASSETAT i t
+
+tx.inputs[i].assets.lookup(assetId)
+                           // → OP_INSPECTINASSETLOOKUP i assetId.txid assetId.gidx
+                           //   Returns: amount (> 0) or -1 if not found
+```
+
+### Cross-Output Asset Lookups
+
+```javascript
+tx.outputs[o].assets.length
+                           // → OP_INSPECTOUTASSETCOUNT o
+
+tx.outputs[o].assets[t].assetId
+tx.outputs[o].assets[t].amount
+                           // → OP_INSPECTOUTASSETAT o t
+
+tx.outputs[o].assets.lookup(assetId)
+                           // → OP_INSPECTOUTASSETLOOKUP o assetId.txid assetId.gidx
+                           //   Returns: amount (> 0) or -1 if not found
+```
+
+---
+
+## Type Definitions
+
+```javascript
+// Asset ID - identifies an asset by its genesis transaction and group index
 struct AssetId {
     txid: bytes32,
     gidx: int
@@ -574,20 +679,108 @@ struct AssetId {
 struct AssetRef {
     byId: bool,              // true for BY_ID, false for BY_GROUP
     assetId: AssetId,        // Used when byId = true
-    groupIndex: int         // Used when byId = false
+    groupIndex: int          // Used when byId = false (references group in same tx)
 }
 
-// Teleport-specific introspection records
-struct TeleportOut {
-    txid: bytes32,
-    vout: int,
+// Input types
+enum AssetInputType { LOCAL = 0x01, TELEPORT = 0x02 }
+
+struct AssetInputLocal {
+    type: AssetInputType,    // LOCAL
+    inputIndex: int,         // Transaction input index
     amount: bigint
 }
-struct TeleportIn {
-    txid: bytes32,
-    vout: int,
+
+struct AssetInputTeleport {
+    type: AssetInputType,    // TELEPORT
+    paymentScript: bytes,    // Variable-length payment script (from witness)
+    nonce: bytes32,          // 32-byte random nonce (from witness)
+    amount: bigint
+    // commitment = sha256(paymentScript || nonce)
+}
+
+// Output types
+enum AssetOutputType { LOCAL = 0x01, TELEPORT = 0x02 }
+
+struct AssetOutputLocal {
+    type: AssetOutputType,   // LOCAL
+    outputIndex: int,        // Transaction output index
     amount: bigint
 }
+
+struct AssetOutputTeleport {
+    type: AssetOutputType,   // TELEPORT
+    commitment: bytes32,     // sha256(payment_script || nonce)
+    amount: bigint
+}
+
+```
+
+---
+
+## Common Patterns
+
+### Verifying Teleport Commitment
+
+The teleport commitment is `sha256(payment_script || nonce)`. To verify:
+
+```javascript
+// Using streaming SHA256 (efficient for variable-length data)
+let state = OP_SHA256INITIALIZE;
+state = OP_SHA256UPDATE(state, paymentScript);
+state = OP_SHA256UPDATE(state, nonce);
+let computedCommitment = OP_SHA256FINALIZE(state);
+require(computedCommitment == expectedCommitment);
+
+// Or simply:
+require(sha256(paymentScript + nonce) == expectedCommitment);
+```
+
+### Checking Asset Presence
+
+```javascript
+// Check if an asset is present in transaction
+let groupIndex = tx.assetGroups.find(assetId);
+require(groupIndex != null, "Asset not found");
+
+// Check if asset is at a specific output
+let amount = tx.outputs[o].assets.lookup(assetId);
+require(amount > 0, "Asset not at output");
+```
+
+### Checking if Asset is Fresh (New Issuance)
+
+```javascript
+// Check if group creates a new asset (txid matches this transaction)
+let group = tx.assetGroups[k];
+require(group.isFresh, "Must be fresh issuance");
+
+// Equivalent low-level check:
+// OP_INSPECTASSETGROUPASSETID k → txid gidx
+// OP_DROP OP_TXID OP_EQUAL → bool
+```
+
+### Checking Delta (Mint/Burn/Transfer)
+
+```javascript
+let group = tx.assetGroups[k];
+
+// Transfer (no supply change)
+require(group.delta == 0, "Must be transfer");
+
+// Mint (supply increase)
+require(group.delta > 0, "Must be mint");
+
+// Burn (supply decrease)
+require(group.delta < 0, "Must be burn");
+```
+
+### Verifying Control Asset
+
+```javascript
+let group = tx.assetGroups.find(assetId);
+require(group != null, "Asset not found");
+require(group.control == expectedControlId, "Wrong control asset");
 ```
 
 
@@ -1251,8 +1444,8 @@ The entire system is trustless. Ownership is enforced by the Ark protocol, and a
 
 Each ArkadeKitty is a unique Arkade Asset with an amount of 1. The asset is non-fungible and can be owned and transferred like any other asset on the network.
 
-- **Species Control via Presence-Only Enforcement**: All Kitties share the same control asset (the "Species Control" asset). Under the current spec and tools, control is presence-only: the Species Control group must be present somewhere in the transaction, but Δ=0 retention or re-locking is not required. Output introspection is still used to verify the child Kitty's properties (metadata, NFT amount, etc.).
-- **Species Control Asset**: A single control asset defines the species. Every Kitty's group MUST set `control` to this exact `assetId`. Transactions that mint or reissue Kitties MUST include the Species Control group (presence-only). Minting the control and the controlled asset in the same transaction is allowed by spec and supported by the tools.
+- **Species Control via Delta Enforcement**: All Kitties share the same control asset (the "Species Control" asset). The Species Control group must be present in any breeding transaction with `delta == 0` (no minting or burning of the control asset itself). This ensures the control asset is retained and can authorize future breeding operations.
+- **Species Control Asset**: A single control asset defines the species. Every Kitty's group MUST set `control` to this exact `assetId`. Transactions that mint or reissue Kitties MUST include the Species Control group with `delta == 0`. Minting the control and the controlled asset in the same transaction is allowed by spec and supported by the tools.
 - **Genesis Asset (optional lore)**: A special "Genesis Kitty" can still exist as the first Kitty minted under the Species Control. Its `assetId` may be referenced off-chain for lore/UX, but authorization is strictly enforced by the Species Control.
 
 - **Provenance Verification**: To prevent counterfeit assets, the `BreedKitties` contract enforces that any parent Kitty (and any child) sets its `control` reference to the Species Control `assetId`. Any asset with a different or missing control reference cannot be used for breeding and cannot be minted by the contract.
@@ -1411,8 +1604,8 @@ contract BreedCommit(
         require(sireGroup != null && dameGroup != null, "Sire and Dame assets must be spent");
         require(sireGroup.control == speciesControlId, "Sire not Species-Controlled");
         require(dameGroup.control == speciesControlId, "Dame not Species-Controlled");
-        require(sireGroup.metadataHash == computeKittyMetadataRoot(sireGenome, sireGenerationBE8), "Sire metadata hash mismatch");
-        require(dameGroup.metadataHash == computeKittyMetadataRoot(dameGenome, dameGenerationBE8), "Dame metadata hash mismatch");
+        require(sireGroup.inputMetadataHash == computeKittyMetadataRoot(sireGenome, sireGenerationBE8), "Sire metadata hash mismatch");
+        require(dameGroup.inputMetadataHash == computeKittyMetadataRoot(dameGenome, dameGenerationBE8), "Dame metadata hash mismatch");
 
         // 2. Verify Species Control asset is present and retained
         let speciesGroup = tx.assetGroups.find(speciesControlId);
@@ -1467,6 +1660,7 @@ contract BreedReveal(
         kittyOutputIndex: int,
         sireOutputIndex: int,
         dameOutputIndex: int,
+        speciesControlOutputIndex: int,
     ) {
         // 1. Verify the user's salt
         require(sha256(salt) == saltHash, "Invalid salt");
@@ -1476,7 +1670,12 @@ contract BreedReveal(
         let commitOutpoint = tx.input.current.outpoint;
         require(checkDataSig(oracleSig, sha256(commitOutpoint + oracleRand), oracle), "Invalid oracle signature");
 
-        // 3. Find the new Kitty's asset group
+        // 3. Verify Species Control is present and retained (delta == 0)
+        let speciesGroup = tx.assetGroups.find(speciesControlId);
+        require(speciesGroup != null && speciesGroup.delta == 0, "Species Control must be present and retained");
+        require(tx.outputs[speciesControlOutputIndex].assets.lookup(speciesControlId) == 1, "Species Control not in output");
+
+        // 4. Find the new Kitty's asset group
         let newKittyGroup = tx.assetGroups.find(newKittyId);
         require(newKittyGroup != null, "New Kitty asset group not found");
         require(newKittyGroup.isFresh && newKittyGroup.delta == 1, "Child must be a fresh NFT");
@@ -1485,23 +1684,31 @@ contract BreedReveal(
         require(newKittyOutput.assets.lookup(newKittyId) == 1, "New Kitty not locked in output");
         require(newKittyOutput.scriptPubKey == newKittyOwner, "New Kitty must be sent to a P2PKH address");
 
-        // 4. Generate the unpredictable genome and expected metadata hash
+        // 5. Generate the unpredictable genome and expected metadata hash
         let entropy = sha256(salt + oracleRand);
         let newGenome = mixGenomes(sireGenome, dameGenome, entropy);
         let expectedMetadataHash = computeKittyMetadataRoot(newGenome, computeChildGeneration(sireGenerationBE8, dameGenerationBE8));
 
-        // 5. Enforce all Kitty creation rules
-        require(newKittyGroup.metadataHash == expectedMetadataHash, "Child metadata hash mismatch");
+        // 6. Enforce all Kitty creation rules (use outputMetadataHash for the new asset)
+        require(newKittyGroup.outputMetadataHash == expectedMetadataHash, "Child metadata hash mismatch");
 
     }
 
     // If the reveal doesn't happen, allow parents to be reclaimed.
-    function refund(dameOutputIndex: int, sireOutputIndex: int) {
+    function refund(dameOutputIndex: int, sireOutputIndex: int, speciesControlOutputIndex: int) {
         // 1. Check that the timeout has passed
-        require(tx.time >= expirationTime, "Timeout not yet reached");
+        require(tx.locktime >= expirationTime, "Timeout not yet reached");
 
-        require(tx.outputs[sireOutputIndex].assets.lookup(sireId) == 1, "Sire not refunded to owner");
-        require(tx.outputs[dameOutputIndex].assets.lookup(dameId) == 1, "Dame not refunded to owner");
+        // 2. Verify parents are returned to their owners
+        require(tx.outputs[sireOutputIndex].assets.lookup(sireId) == 1, "Sire not refunded");
+        require(tx.outputs[sireOutputIndex].scriptPubKey == sireOwner, "Sire not refunded to owner");
+        require(tx.outputs[dameOutputIndex].assets.lookup(dameId) == 1, "Dame not refunded");
+        require(tx.outputs[dameOutputIndex].scriptPubKey == dameOwner, "Dame not refunded to owner");
+
+        // 3. Verify Species Control is retained (delta == 0)
+        let speciesGroup = tx.assetGroups.find(speciesControlId);
+        require(speciesGroup != null && speciesGroup.delta == 0, "Species Control must be retained");
+        require(tx.outputs[speciesControlOutputIndex].assets.lookup(speciesControlId) == 1, "Species Control not in output");
     }
 
 }

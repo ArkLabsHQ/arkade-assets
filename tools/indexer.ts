@@ -1,8 +1,8 @@
 // tools/indexer.ts
 // ArkAssetV1 indexer with JSON storage.
 
-import * as codec from './arkass-codec';
-import { Packet, Group, AssetId, AssetRef, AssetInput, AssetOutput } from './arkass-codec';
+import * as codec from './arkade-assets-codec';
+import { Packet, Group, AssetId, AssetRef, AssetInput, AssetOutput } from './arkade-assets-codec';
 
 // ----------------- TYPE DEFINITIONS -----------------
 
@@ -27,6 +27,7 @@ interface Tx {
 interface AssetDefinition {
   control: string | null;
   metadata: { [key: string]: string };
+  immutable: boolean;
 }
 
 interface AssetState { [assetKey: string]: AssetDefinition; }
@@ -226,15 +227,28 @@ export class Indexer {
     }
   }
 
+  /**
+   * Parses the Arkade Asset packet from a transaction.
+   * Returns null if no packet found.
+   * If multiple OP_RETURNs with ARK magic exist, uses the first Type 0x00 (Assets) record by output index order.
+   */
   parseArkassFromTx(tx: Tx): (Packet & { outputIndex: number }) | null {
+    let foundPacket: (Packet & { outputIndex: number }) | null = null;
+
+    // Scan outputs in order - first valid Type 0x00 packet wins
     for (const out of tx.vout || []) {
       const scriptBytes = codec.hexToBytes(out.scriptPubKey || '');
+
+      // Try to parse as Arkade Asset packet
       const parsed = codec.parseOpReturnScript(scriptBytes);
-      if (parsed) {
-        return { ...parsed, outputIndex: out.n };
+      if (parsed && parsed.groups && parsed.groups.length > 0 && !foundPacket) {
+        foundPacket = { ...parsed, outputIndex: out.n };
+        // Stop at first valid packet (lowest output index with Type 0x00)
+        break;
       }
     }
-    return null;
+
+    return foundPacket;
   }
 
   private _applyTransaction(tx: Tx, state: State, blockHeight?: number): { changed: boolean; reason?: string; burned?: any[] } {
@@ -271,6 +285,48 @@ export class Indexer {
       outputs: g.outputs || [],
     }));
 
+    // --- VALIDATION: Output index bounds ---
+    const numTxOutputs = tx.vout?.length || 0;
+    for (const g of eff) {
+      for (const out of g.outputs) {
+        if (out.type === 'LOCAL' && out.o >= numTxOutputs) {
+          throw new Error(`Output index ${out.o} out of bounds (tx has ${numTxOutputs} outputs)`);
+        }
+      }
+    }
+
+    // --- VALIDATION: Input index bounds ---
+    const numTxInputs = tx.vin?.length || 0;
+    for (const g of eff) {
+      for (const inp of g.inputs) {
+        if (inp.type === 'LOCAL' && inp.i >= numTxInputs) {
+          throw new Error(`Input index ${inp.i} out of bounds (tx has ${numTxInputs} inputs)`);
+        }
+      }
+    }
+
+    // --- VALIDATION: BY_GROUP forward reference check ---
+    for (let gidx = 0; gidx < groups.length; gidx++) {
+      const g = groups[gidx];
+      if (g.issuance?.controlAsset && !('txidHex' in g.issuance.controlAsset)) {
+        const refGidx = g.issuance.controlAsset.gidx;
+        if (refGidx >= groups.length) {
+          throw new Error(`BY_GROUP reference ${refGidx} is out of bounds (only ${groups.length} groups)`);
+        }
+        // Note: Forward references (refGidx > gidx) are allowed per spec for same-tx control+asset minting
+      }
+    }
+
+    // --- VALIDATION: Self-referential control asset check ---
+    for (let gidx = 0; gidx < groups.length; gidx++) {
+      const g = groups[gidx];
+      if (g.issuance?.controlAsset && !('txidHex' in g.issuance.controlAsset)) {
+        if (g.issuance.controlAsset.gidx === gidx) {
+          throw new Error(`Group ${gidx} cannot reference itself as its own control asset`);
+        }
+      }
+    }
+
     const resolveAssetRef = (ref: AssetRef | null): AssetId | null => {
       if (!ref) return null;
       if ('txidHex' in ref && ref.txidHex) return ref;
@@ -288,6 +344,10 @@ export class Indexer {
       const assetKey = Indexer.assetKey(g.assetId.txidHex, g.assetId.gidx);
       let sumIn = 0n;
       for (const inp of g.inputs) {
+        // Validate zero amounts (spec: amounts MUST be > 0)
+        if (BigInt(inp.amt) <= 0n) {
+          throw new Error(`Zero or negative amount in input is invalid`);
+        }
         if (inp.type === 'LOCAL') {
           sumIn += BigInt(inp.amt);
           const prevKey = Indexer.utxoKey(tx.vin[inp.i].txid, tx.vin[inp.i].vout);
@@ -295,27 +355,33 @@ export class Indexer {
           if (!prevoutConsumption[prevKey][assetKey]) prevoutConsumption[prevKey][assetKey] = 0n;
           prevoutConsumption[prevKey][assetKey] += BigInt(inp.amt);
                 } else if (inp.type === 'TELEPORT') {
-          const pending = state.pendingTeleports[inp.commitment];
-          if (!pending) throw new Error(`TELEPORT input commitment ${inp.commitment} not found`);
+          // Derive commitment from witness
+          const commitment = codec.getWitnessCommitment(inp.witness);
+          const pending = state.pendingTeleports[commitment];
+          if (!pending) throw new Error(`TELEPORT input commitment ${commitment} not found`);
 
           // If a teleport originates from a confirmed block, it requires a confirmation delay.
           if (pending.sourceHeight !== undefined) {
             const currentHeight = blockHeight ?? state.blockHeight;
             const confirmations = currentHeight - pending.sourceHeight;
             if (confirmations < MIN_TELEPORT_CONFIRMATIONS) {
-              throw new Error(`TELEPORT input ${inp.commitment} does not have enough confirmations: ${confirmations}/${MIN_TELEPORT_CONFIRMATIONS}`);
+              throw new Error(`TELEPORT input ${commitment} does not have enough confirmations: ${confirmations}/${MIN_TELEPORT_CONFIRMATIONS}`);
             }
           }
 
           if (pending.assetId.txidHex !== g.assetId.txidHex || pending.assetId.gidx !== g.assetId.gidx || BigInt(pending.amount) !== BigInt(inp.amt)) {
-            throw new Error(`TELEPORT input ${inp.commitment} mismatch`);
+            throw new Error(`TELEPORT input ${commitment} mismatch`);
           }
-          delete state.pendingTeleports[inp.commitment];
+          delete state.pendingTeleports[commitment];
           sumIn += BigInt(inp.amt);
         }
       }
       let sumOut = 0n;
       for (const out of g.outputs) {
+        // Validate zero amounts (spec: amounts MUST be > 0)
+        if (BigInt(out.amt) <= 0n) {
+          throw new Error(`Zero or negative amount in output is invalid`);
+        }
         sumOut += BigInt(out.amt);
         if (out.type === 'TELEPORT') {
           if (state.pendingTeleports[out.commitment]) {
@@ -411,11 +477,19 @@ export class Indexer {
         if (issuance) {
           const resolved = resolveAssetRef(issuance.controlAsset || null);
           const controlKey = resolved ? Indexer.assetKey(resolved.txidHex, resolved.gidx) : null;
-          state.assets[assetKey] = { control: controlKey, metadata: issuance.metadata || {} };
+          state.assets[assetKey] = {
+            control: controlKey,
+            metadata: issuance.metadata || {},
+            immutable: issuance.immutable || false
+          };
         } else {
-          state.assets[assetKey] = { control: null, metadata: {} };
+          state.assets[assetKey] = { control: null, metadata: {}, immutable: false };
         }
       } else if (groupData.metadata) { // Metadata Update
+        // Check if asset is immutable
+        if (state.assets[assetKey].immutable) {
+          throw new Error(`Cannot update metadata for immutable asset ${assetKey}`);
+        }
         requireControlPresent(assetKey);
         state.assets[assetKey].metadata = groupData.metadata;
       }
