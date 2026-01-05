@@ -164,14 +164,14 @@ AssetRef  := oneof {
 # later in the packet. Validators must use two-pass processing to resolve references.
 
 AssetInput := oneof {
-               0x01 LOCAL    { i: u16, amt: u64 }                    # input from same transaction's prevouts
+               0x01 LOCAL    { i: u32, amt: u64 }                    # input from same transaction's prevouts
              | 0x02 TELEPORT { amt: u64, witness: TeleportWitness }  # input from teleport; commitment = sha256(witness)
              }
 
 TeleportWitness := varint(script_len) || payment_script || varint(nonce_len) || nonce
 
 AssetOutput := oneof {
-               0x01 LOCAL    { o: u16, amt: u64 }                    # output within same transaction
+               0x01 LOCAL    { o: u32, amt: u64 }                    # output within same transaction
              | 0x02 TELEPORT { commitment: bytes32, amt: u64 }       # output to external transaction via commitment 
              }
 
@@ -369,7 +369,7 @@ A teleport transfer is specified using the `TELEPORT` variant of `AssetOutput`:
 
 ```
 AssetOutput := oneof {
-  0x01 LOCAL    { o: u16, amt: u64 }                    # output within same transaction
+  0x01 LOCAL    { o: u32, amt: u64 }                    # output within same transaction
   0x02 TELEPORT { commitment: bytes32, amt: u64 }# output to external transaction via commitment
 }
 ```
