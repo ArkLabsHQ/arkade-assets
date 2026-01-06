@@ -58,8 +58,6 @@ Asset amounts are atomic units, and supply management is managed through UTXO sp
 
 Exactly **one OP\_RETURN output** must contain the Arkade Asset protocol packet, prefixed with magic bytes. The packet itself is a top-level TLV (Type-Length-Value) stream, allowing multiple data types to coexist within a single transaction.
 
-**Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
-
 ```
 scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 ```
@@ -67,6 +65,8 @@ scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 - **Magic_Bytes**: `0x41524b` ("ARK")
 - **TLV_Stream**: A concatenation of one or more TLV records.
 - **TLV Record**: `Type (1-byte) || Length (CompactSize) || Value (bytes)`
+
+**Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
 
 ### Arkade Asset V1 Packet (Type 0x00)
 
@@ -122,11 +122,11 @@ Issuance := {
 
 - **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
   1. Include the asset's `ControlAsset` as an input to authorize the change.
-  2. Include the new `Metadata` property in the asset group, containing the full new metadata map.
+  2. Include the new `Group.Metadata` property in the asset group, containing the full new metadata map.
 
-- **Mutual Exclusivity**: The `Issuance` and `Metadata` properties are mutually exclusive. An asset group **must not** contain both.
+- **Mutual Exclusivity**: The `Issuance` and `Group.Metadata` properties are mutually exclusive. An asset group **must not** contain both.
 
-- **Covenant Enforcement**: The validity of a metadata transition (e.g., ensuring only certain keys are changed) is enforced by covenant scripts, which can inspect the input and output metadata hashes.
+- **Covenant Enforcement**: The validity of a metadata transition (e.g., ensuring only certain keys are changed) may be enforced by covenant scripts, which can inspect the input and output metadata hashes.
 
 ### 3.2. Encoding Details
 
@@ -150,6 +150,8 @@ For data structures that represent one of several variants (a `oneof` structure)
 -   **`AssetRef`**: `0x01` for `BY_ID`, `0x02` for `BY_GROUP`.
 -   **`AssetInput`**: `0x01` for `LOCAL`, `0x02` for `TELEPORT`.
 -   **`AssetOutput`**: `0x01` for `LOCAL`, `0x02` for `TELEPORT`.
+
+Type marker values are interpreted in the context of the structure being parsed; identical numeric values in different structures do not conflict.
 
 ### Types
 
@@ -222,11 +224,13 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
      - Commitment matches an entry in pending teleports with the correct `source_txid`
      - The assets flow matches the aggregate amount of outputs carrying the committed `payment_script`
 
+The nonce used in a teleport commitment must be communicated to the intended claimant out-of-band. Knowledge of both `payment_script` and `nonce` is required for claiming a teleport input. 
+
 3. **Validation Rules**:
    - Arkade Signer (offchain) / Indexer (onchain) tracks pending teleports via commitment hash.
    - **Zero Amount Validation**: All asset amounts MUST be greater than zero. An input or output with `amount = 0` is INVALID.
    - **Input Amount Validation**: Validators MUST verify that declared input amounts match the actual asset balances of referenced UTXOs. A packet claiming more tokens than a UTXO contains is INVALID.
-   - **Output Index Validation**: Output indices MUST reference valid transaction outputs. Out-of-bounds indices render the transaction INVALID.
+   - **Output Index Validation**: Output indices MUST reference valid transaction outputs. Out-of-bound indices render the transaction INVALID.
    - **Lifecycle & Claiming Rules**:
      - **Arkade-Native Teleport (source)**: No confirmation delay on the source. Claimable immediately by an arkade transaction (instant finality), or by an on-chain transaction (finality after 6 confirmations).
      - **On-chain Teleport (source)**: Source must have `TELEPORT_MIN_CONFIRMATIONS = 6` block confirmations before claims are valid. This protects against reorg attacks.
@@ -297,13 +301,13 @@ Metadata is managed directly within the `Group` packet structure:
 
 **1. Genesis Metadata**
 
-When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Metadata` map in the `Group` defines its initial, base metadata. This is useful for defining core, permanent properties.
+When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Issuance.Metadata` map in the `Group` defines its initial, base metadata. This is useful for defining core, permanent properties. 
 
 **2. Metadata Updates**
 
-To update the metadata for an existing asset, a `Group` for that asset must be included in a transaction. This group may or may not have inputs and outputs.
+To update the metadata for an existing asset, a `Group` for that asset must be included in a transaction. This group may or may not have inputs and outputs. `InputCount` may be zero only if the Control Asset is spent elsewhere in the transaction. 
 
-- **Rule**: If the `Metadata` field is present in a group for an *existing* asset, it is treated as an update. The transaction is only valid if one of its inputs spends the UTXO that currently holds the **Control Asset** for the asset being updated.
+- **Rule**: If the `Group.Metadata` field is present in a group for an *existing* asset, it is treated as an update. The transaction is only valid if one of its inputs spends the UTXO that currently holds the **Control Asset** for the asset being updated.
 - **Behavior**: An indexer will replace the asset's existing metadata with the new key-value pairs. This allows any entity with spending rights of the control asset to change or add metadata fields over time.
 - **Idempotency**: If the provided metadata is identical to the existing metadata, the transaction is still valid (assuming authorization), but no state change occurs. This allows clients to submit metadata without needing to check if it has changed.
 
@@ -332,12 +336,12 @@ To ensure data integrity and consistency with the underlying Bitcoin blockchain,
 The indexer's state (including all asset definitions, UTXO balances, and processed transactions) is not stored in a single monolithic file. Instead, it is versioned by block height. After processing all transactions in a block, the indexer saves a complete snapshot of the new state into a file named `state_<height>.json`.
 
 - **Genesis State**: The state before any blocks are processed is at `blockHeight: -1`.
-- **Block 100**: After processing, the state is saved to `state_n.json` and the internal `blockHeight` becomes `n`.
-- **Block 101**: The indexer loads `state_(n+1).json`, applies transactions from block 101, and saves the result to `state_(n+1).json`.
+- **Block n**: After processing, the state is saved to `state_n.json` and the internal `blockHeight` becomes `n`.
+- **Block n+1**: The indexer loads `state_(n).json`, applies transactions from block n+1, and saves the result to `state_(n+1).json`.
 
 ### Block-Level Atomicity
 
-Transactions are applied on a per-block basis. The indexer first loads the state from the previous block (`n-1`) and applies all transactions from the new block (`n`) to a temporary, in-memory copy of the state. Only if all transactions in the block are valid and applied successfully is the new state committed to disk as `state_N.json`. If any transaction fails, the entire block is rejected, and no changes are saved.
+Transactions are applied on a per-block basis. To process block n, the indexer first loads the state from the previous block (`state_(n-1).json`) and applies all transactions from block n to a temporary, in-memory copy of the state. Only if all transactions in block n are valid under the Arkade Asset rules and applied successfully is the new state committed to disk as `state_n.json`. If any transaction fails, the indexer MUST NOT advance its state or write `state_n.json` (i.e., block n is not applied by the indexer).
 
 ### Rollback on Reorganization
 
@@ -347,7 +351,7 @@ If a blockchain reorganization occurs, the external process monitoring the block
 2.  **Reload**: The indexer then loads the state from the previous block (`state_100.json`), making it the current active state.
 3.  **Apply New Block**: The transactions from the new, valid block (101') can then be applied using the `applyBlock()` method, which will create a new `state_101.json`.
 
-This mechanism ensures that the indexer's view of asset ownership remains synchronized with the canonical chain, providing a robust foundation for applications built on ArkAsset.
+This mechanism ensures that the indexer's view of asset ownership remains synchronized with the canonical chain, providing a robust foundation for applications built on Arkade Assets.
 
 ### Unconfirmed Transactions
 
