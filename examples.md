@@ -28,7 +28,7 @@ flowchart LR
 
 - **Group[1] (New Asset A):**
   - `AssetId`: Omitted (fresh issuance, new ID is `(this_txid, 1)`)
-  - `Issuance.ControlAsset`: `BY_ID { assetid: {txidC, gidxC} }` (points to asset C)
+  - `ControlAsset`: `BY_ID { assetid: {txidC, gidxC} }` (points to asset C)
   - `Outputs`: `(o:1, amt:500), (o:2, amt:500)`
   - *Result: Σout > Σin, fresh issuance is valid because control asset C is present in Group[0].*
 
@@ -52,12 +52,11 @@ const payload: Packet = {
       outputs: [{ type: 'LOCAL', o: 0, amt: 1n }]
     },
     // Group[1] Token: A fresh issuance, controlled by group 0.
+    // AssetId is omitted, which indicates this is a genesis (fresh asset).
     {
-      issuance: {
-        controlAsset: { gidx: 0 }, // References Group[0] implicitly
-        metadata: { name: 'Token A' },
-        immutable: false,
-      },
+      controlAsset: { gidx: 0 }, // References Group[0]
+      metadata: { name: 'Token A' },
+      immutable: false,
       inputs: [],
       outputs: [
         { type: 'LOCAL', o: 1, amt: 500n },

@@ -98,33 +98,29 @@ Packet := {
 ```
 Group := {
   AssetId?      : AssetId          # absent => fresh asset (AssetId* = (this_txid, group_index))
-  Issuance?     : Issuance         # Genesis only: Defines issuance policy and initial metadata.
-  Metadata?     : map<string, string> # Update only: The new metadata for an existing asset.
+  ControlAsset? : AssetRef         # Genesis only: Defines the control asset for reissuance/metadata updates.
+  Metadata?     : map<string, string> # Initial metadata at genesis, or new metadata for updates.
+  Immutable?    : bool             # Genesis only: If true, metadata cannot be changed after genesis.
   InputCount    : varuint
   Inputs[InputCount]  : AssetInput
   OutputCount   : varuint
   Outputs[OutputCount] : AssetOutput
 }
-
-Issuance := {
-  ControlAsset? : AssetRef
-  Metadata?     : map<string, string>
-  Immutable?    : bool             # If true, metadata cannot be changed after genesis.
-}
 ```
 
-### 3.1. Issuance and Metadata Rules
+### 3.1. Genesis and Metadata Rules
 
-- **Genesis (Fresh Assets)**: The `Issuance` property is **only allowed** when creating a fresh asset (i.e., when `AssetId` is absent). It defines the initial control policy and metadata.
-  - If `Issuance.Immutable` is set to `true`, the asset's metadata can never be changed.
-  - Initial Metadata is set via `Issuance.Metadata`. The `Group.Metadata` property **must not** be present at genesis.
-  - If `Issuance.ControlAsset` is omitted, no future token reissuance is possible. 
+- **Genesis (Fresh Assets)**: A fresh asset is created when `AssetId` is absent. The absence of `AssetId` itself indicates genesis — no separate marker is needed.
+  - `ControlAsset` may be set to define the control asset for future reissuance and metadata updates.
+  - `Metadata` may be set to define initial metadata.
+  - If `Immutable` is set to `true`, the asset's metadata can never be changed after genesis.
+  - If `ControlAsset` is omitted, no future token reissuance or metadata updates are possible. In this case, the asset is **implicitly immutable** regardless of whether `Immutable` is set—there is no authorization mechanism to permit changes.
 
 - **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
   1. Include the asset's `ControlAsset` as an input to authorize the change.
-  2. Include the new `Group.Metadata` property in the asset group, containing the full new metadata map.
+  2. Include the new `Metadata` property in the asset group, containing the full new metadata map.
 
-- **Mutual Exclusivity**: The `Issuance` and `Group.Metadata` properties are mutually exclusive. An asset group **must not** contain both.
+- **Genesis-Only Fields**: The `ControlAsset` and `Immutable` fields are only valid at genesis (when `AssetId` is absent). They **must not** be present for existing assets.
 
 - **Covenant Enforcement**: The validity of a metadata transition (e.g., ensuring only certain keys are changed) may be enforced by covenant scripts, which can inspect the input and output metadata hashes.
 
@@ -134,12 +130,13 @@ While the specification uses a logical TLV (Type-Length-Value) model, the canoni
 
 **Group Optional Fields: Presence Byte**
 
-Instead of using a type marker for each optional field within a `Group` (`AssetId`, `Issuance`), the implementation uses a single **presence byte**. This byte is a bitfield that precedes the group's data, where each bit signals the presence of an optional field:
+Instead of using a type marker for each optional field within a `Group`, the implementation uses a single **presence byte**. This byte is a bitfield that precedes the group's data, where each bit signals the presence of an optional field:
 
 -   `bit 0 (0x01)`: `AssetId` is present.
--   `bit 1 (0x02)`: `Issuance` is present (genesis only).
--   `bit 2 (0x04)`: `Metadata` is present (update only).
--   `bits 3-7`: Reserved for future protocol extensions. Parsers MUST ignore these bits if set.
+-   `bit 1 (0x02)`: `ControlAsset` is present (genesis only).
+-   `bit 2 (0x04)`: `Metadata` is present.
+-   `bit 3 (0x08)`: `Immutable` is present (genesis only).
+-   `bits 4-7`: Reserved for future protocol extensions. Parsers MUST ignore these bits if set.
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
 
@@ -301,16 +298,16 @@ Metadata is managed directly within the `Group` packet structure:
 
 **1. Genesis Metadata**
 
-When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Issuance.Metadata` map in the `Group` defines its initial, base metadata. This is useful for defining core, permanent properties. 
+When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Metadata` map in the `Group` defines its initial, base metadata. This is useful for defining core, permanent properties.
 
 **2. Metadata Updates**
 
 To update the metadata for an existing asset, the asset MUST have a control asset, and the transaction packet must include specific groups:
 
 - A `Group` for the asset being updated (e.g., asset B) must be present. This group may have no inputs or outputs, as the transaction is simply updating metadata.
-- A `Group` for the control asset (e.g., asset A) must be included. The control asset must be spent to authorize the update. 
+- A `Group` for the control asset (e.g., asset A) must be included. The control asset must be spent to authorize the update.
 
-- **Rule**: If the `Group.Metadata` field is present in a group for an *existing* asset, it is treated as an update. The transaction is only valid if one of its inputs spends the UTXO that currently holds the **Control Asset** for the asset being updated.
+- **Rule**: If the `Metadata` field is present in a group for an *existing* asset, it is treated as an update. The transaction is only valid if one of its inputs spends the UTXO that currently holds the **Control Asset** for the asset being updated.
 - **Behavior**: An indexer will replace the asset's existing metadata with the new key-value pairs. This allows any entity with spending rights of the control asset to change or add metadata fields over time.
 - **Idempotency**: If the provided metadata is identical to the existing metadata, the transaction is still valid (assuming authorization), but no state change occurs. This allows clients to submit metadata without needing to check if it has changed.
 
@@ -326,7 +323,7 @@ To enable trustless, onchain validation of asset properties without incurring hi
 - **Hashing Mechanism**: The `metadataHash` is the **Merkle root** of the asset's metadata. This provides a secure and efficient way to verify individual key-value pairs without processing the full metadata set onchain.
   - **Leaf Generation**: The leaves of the Merkle tree are the `sha256` hashes of the canonically encoded key-value pairs. The pairs MUST be sorted by key before hashing to ensure a deterministic root.
   - **Canonical Entry Format**: `leaf[i] = sha256(varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])`
-  - **Verification**: This model allows a user to prove a specific metadata property by providing the key, value, and a Merkle path to the contract. The contract can then verify the proof against the onchain root hash.
+  - **Verification**: Contracts verify metadata by recomputing the expected Merkle root from user-provided values. Since Arkade Script does not include loop opcodes, contracts must know their metadata schema at compile time. For fixed schemas (e.g., 2-4 known keys), contracts can hardcode the leaf prefixes and tree structure, recomputing the root directly rather than verifying arbitrary Merkle proof paths. See the ArkadeKitties example, which uses a fixed 2-leaf tree for `genome` and `generation` fields.
 
 ---
 
