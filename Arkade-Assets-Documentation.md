@@ -115,7 +115,7 @@ Group := {
   - `Metadata` may be set to define initial metadata.
   - If `Immutable` is set to `true`, the asset's metadata can never be changed after genesis.
   - If `ControlAsset` is omitted, no future token reissuance or metadata updates are possible.
-  - **Validation**: If `ControlAsset` is absent, `Immutable` MUST be `true` (or omitted, which defaults to immutable behavior). Setting `Immutable` to `false` without a `ControlAsset` is INVALID, as metadata updates would be impossible anyway.
+  - **Validation**: If `ControlAsset` is absent, `Immutable` MUST be explicitly set to `true`. Omitting `Immutable` (which defaults to `false`) without a `ControlAsset` is INVALID, as it would imply mutability while no authorization mechanism exists.
 
 - **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
   1. Include the asset's `ControlAsset` as an input to authorize the change.
