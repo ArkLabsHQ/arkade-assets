@@ -114,7 +114,8 @@ Group := {
   - `ControlAsset` may be set to define the control asset for future reissuance and metadata updates.
   - `Metadata` may be set to define initial metadata.
   - If `Immutable` is set to `true`, the asset's metadata can never be changed after genesis.
-  - If `ControlAsset` is omitted, no future token reissuance is possible.
+  - If `ControlAsset` is omitted, no future token reissuance or metadata updates are possible.
+  - **Validation**: If `ControlAsset` is absent, `Immutable` MUST be `true` (or omitted, which defaults to immutable behavior). Setting `Immutable` to `false` without a `ControlAsset` is INVALID, as metadata updates would be impossible anyway.
 
 - **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
   1. Include the asset's `ControlAsset` as an input to authorize the change.
@@ -323,7 +324,7 @@ To enable trustless, onchain validation of asset properties without incurring hi
 - **Hashing Mechanism**: The `metadataHash` is the **Merkle root** of the asset's metadata. This provides a secure and efficient way to verify individual key-value pairs without processing the full metadata set onchain.
   - **Leaf Generation**: The leaves of the Merkle tree are the `sha256` hashes of the canonically encoded key-value pairs. The pairs MUST be sorted by key before hashing to ensure a deterministic root.
   - **Canonical Entry Format**: `leaf[i] = sha256(varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])`
-  - **Verification**: This model allows a user to prove a specific metadata property by providing the key, value, and a Merkle path to the contract. The contract can then verify the proof against the onchain root hash.
+  - **Verification**: Contracts verify metadata by recomputing the expected Merkle root from user-provided values. Since Arkade Script does not include loop opcodes, contracts must know their metadata schema at compile time. For fixed schemas (e.g., 2-4 known keys), contracts can hardcode the leaf prefixes and tree structure, recomputing the root directly rather than verifying arbitrary Merkle proof paths. See the ArkadeKitties example, which uses a fixed 2-leaf tree for `genome` and `generation` fields.
 
 ---
 

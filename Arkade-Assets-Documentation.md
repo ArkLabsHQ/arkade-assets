@@ -34,7 +34,7 @@ There are two cases:
 
 ### Control Assets and Reissuance
 
-When a fresh asset is being created, its asset group may specify a control asset. Issuance of a new asset is valid if that control asset is present in the same transaction. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
+When a fresh asset is being created, its asset group may specify a control asset. A fresh asset may be issued while its control asset is also being freshly minted in the same transaction.
 
 Control assets allow additional, future reissuance of a token, and are themselves assets. If an asset group increases supply (Σout > Σin), the corresponding control asset MUST appear in the same transaction. This requirement applies to both fresh issuance and reissuance.
 
@@ -58,8 +58,6 @@ Asset amounts are atomic units, and supply management is managed through UTXO sp
 
 Exactly **one OP\_RETURN output** must contain the Arkade Asset protocol packet, prefixed with magic bytes. The packet itself is a top-level TLV (Type-Length-Value) stream, allowing multiple data types to coexist within a single transaction.
 
-**Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
-
 ```
 scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 ```
@@ -67,6 +65,8 @@ scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 - **Magic_Bytes**: `0x41524b` ("ARK")
 - **TLV_Stream**: A concatenation of one or more TLV records.
 - **TLV Record**: `Type (1-byte) || Length (CompactSize) || Value (bytes)`
+
+**Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
 
 ### Arkade Asset V1 Packet (Type 0x00)
 
@@ -114,15 +114,16 @@ Group := {
   - `ControlAsset` may be set to define the control asset for future reissuance and metadata updates.
   - `Metadata` may be set to define initial metadata.
   - If `Immutable` is set to `true`, the asset's metadata can never be changed after genesis.
-  - If `ControlAsset` is omitted, no future token reissuance is possible.
+  - If `ControlAsset` is omitted, no future token reissuance or metadata updates are possible.
+  - **Validation**: If `ControlAsset` is absent, `Immutable` MUST be `true` (or omitted, which defaults to immutable behavior). Setting `Immutable` to `false` without a `ControlAsset` is INVALID, as metadata updates would be impossible anyway.
 
 - **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
   1. Include the asset's `ControlAsset` as an input to authorize the change.
   2. Include the new `Metadata` property in the asset group, containing the full new metadata map.
 
-- **Genesis-Only Fields**: The `ControlAsset` and `Immutable` fields are only valid at genesis (when `AssetId` is absent). They **may not** be present for existing assets.
+- **Genesis-Only Fields**: The `ControlAsset` and `Immutable` fields are only valid at genesis (when `AssetId` is absent). They **must not** be present for existing assets.
 
-- **Covenant Enforcement**: The validity of a metadata transition (e.g., ensuring only certain keys are changed) is enforced by covenant scripts, which can inspect the input and output metadata hashes.
+- **Covenant Enforcement**: The validity of a metadata transition (e.g., ensuring only certain keys are changed) may be enforced by covenant scripts, which can inspect the input and output metadata hashes.
 
 ### 3.2. Encoding Details
 
@@ -148,6 +149,8 @@ For data structures that represent one of several variants (a `oneof` structure)
 -   **`AssetInput`**: `0x01` for `LOCAL`, `0x02` for `TELEPORT`.
 -   **`AssetOutput`**: `0x01` for `LOCAL`, `0x02` for `TELEPORT`.
 
+Type marker values are interpreted in the context of the structure being parsed; identical numeric values in different structures do not conflict.
+
 ### Types
 
 ```
@@ -161,14 +164,14 @@ AssetRef  := oneof {
 # later in the packet. Validators must use two-pass processing to resolve references.
 
 AssetInput := oneof {
-               0x01 LOCAL    { i: u16, amt: u64 }                    # input from same transaction's prevouts
+               0x01 LOCAL    { i: u32, amt: u64 }                    # input from same transaction's prevouts
              | 0x02 TELEPORT { amt: u64, witness: TeleportWitness }  # input from teleport; commitment = sha256(witness)
              }
 
 TeleportWitness := varint(script_len) || payment_script || varint(nonce_len) || nonce
 
 AssetOutput := oneof {
-               0x01 LOCAL    { o: u16, amt: u64 }                    # output within same transaction
+               0x01 LOCAL    { o: u32, amt: u64 }                    # output within same transaction
              | 0x02 TELEPORT { commitment: bytes32, amt: u64 }       # output to external transaction via commitment 
              }
 
@@ -219,11 +222,13 @@ To solve the circular dependency problem, teleports use a **commitment hash** in
      - Commitment matches an entry in pending teleports with the correct `source_txid`
      - The assets flow matches the aggregate amount of outputs carrying the committed `payment_script`
 
+The nonce used in a teleport commitment must be communicated to the intended claimant out-of-band. Knowledge of both `payment_script` and `nonce` is required for claiming a teleport input. 
+
 3. **Validation Rules**:
    - Arkade Signer (offchain) / Indexer (onchain) tracks pending teleports via commitment hash.
    - **Zero Amount Validation**: All asset amounts MUST be greater than zero. An input or output with `amount = 0` is INVALID.
    - **Input Amount Validation**: Validators MUST verify that declared input amounts match the actual asset balances of referenced UTXOs. A packet claiming more tokens than a UTXO contains is INVALID.
-   - **Output Index Validation**: Output indices MUST reference valid transaction outputs. Out-of-bounds indices render the transaction INVALID.
+   - **Output Index Validation**: Output indices MUST reference valid transaction outputs. Out-of-bound indices render the transaction INVALID.
    - **Lifecycle & Claiming Rules**:
      - **Arkade-Native Teleport (source)**: No confirmation delay on the source. Claimable immediately by an arkade transaction (instant finality), or by an on-chain transaction (finality after 6 confirmations).
      - **On-chain Teleport (source)**: Source must have `TELEPORT_MIN_CONFIRMATIONS = 6` block confirmations before claims are valid. This protects against reorg attacks.
@@ -298,7 +303,10 @@ When an asset is first created (i.e., the `AssetId` is omitted from the group), 
 
 **2. Metadata Updates**
 
-To update the metadata for an existing asset, a `Group` for that asset must be included in a transaction. This group may or may not have inputs and outputs.
+To update the metadata for an existing asset, the asset MUST have a control asset, and the transaction packet must include specific groups:
+
+- A `Group` for the asset being updated (e.g., asset B) must be present. This group may have no inputs or outputs, as the transaction is simply updating metadata.
+- A `Group` for the control asset (e.g., asset A) must be included. The control asset must be spent to authorize the update.
 
 - **Rule**: If the `Metadata` field is present in a group for an *existing* asset, it is treated as an update. The transaction is only valid if one of its inputs spends the UTXO that currently holds the **Control Asset** for the asset being updated.
 - **Behavior**: An indexer will replace the asset's existing metadata with the new key-value pairs. This allows any entity with spending rights of the control asset to change or add metadata fields over time.
@@ -316,7 +324,7 @@ To enable trustless, onchain validation of asset properties without incurring hi
 - **Hashing Mechanism**: The `metadataHash` is the **Merkle root** of the asset's metadata. This provides a secure and efficient way to verify individual key-value pairs without processing the full metadata set onchain.
   - **Leaf Generation**: The leaves of the Merkle tree are the `sha256` hashes of the canonically encoded key-value pairs. The pairs MUST be sorted by key before hashing to ensure a deterministic root.
   - **Canonical Entry Format**: `leaf[i] = sha256(varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])`
-  - **Verification**: This model allows a user to prove a specific metadata property by providing the key, value, and a Merkle path to the contract. The contract can then verify the proof against the onchain root hash.
+  - **Verification**: Contracts verify metadata by recomputing the expected Merkle root from user-provided values. Since Arkade Script does not include loop opcodes, contracts must know their metadata schema at compile time. For fixed schemas (e.g., 2-4 known keys), contracts can hardcode the leaf prefixes and tree structure, recomputing the root directly rather than verifying arbitrary Merkle proof paths. See the ArkadeKitties example, which uses a fixed 2-leaf tree for `genome` and `generation` fields.
 
 ---
 
@@ -329,12 +337,12 @@ To ensure data integrity and consistency with the underlying Bitcoin blockchain,
 The indexer's state (including all asset definitions, UTXO balances, and processed transactions) is not stored in a single monolithic file. Instead, it is versioned by block height. After processing all transactions in a block, the indexer saves a complete snapshot of the new state into a file named `state_<height>.json`.
 
 - **Genesis State**: The state before any blocks are processed is at `blockHeight: -1`.
-- **Block 100**: After processing, the state is saved to `state_n.json` and the internal `blockHeight` becomes `n`.
-- **Block 101**: The indexer loads `state_(n+1).json`, applies transactions from block 101, and saves the result to `state_(n+1).json`.
+- **Block n**: After processing, the state is saved to `state_n.json` and the internal `blockHeight` becomes `n`.
+- **Block n+1**: The indexer loads `state_(n).json`, applies transactions from block n+1, and saves the result to `state_(n+1).json`.
 
 ### Block-Level Atomicity
 
-Transactions are applied on a per-block basis. The indexer first loads the state from the previous block (`n-1`) and applies all transactions from the new block (`n`) to a temporary, in-memory copy of the state. Only if all transactions in the block are valid and applied successfully is the new state committed to disk as `state_N.json`. If any transaction fails, the entire block is rejected, and no changes are saved.
+Transactions are applied on a per-block basis. To process block n, the indexer first loads the state from the previous block (`state_(n-1).json`) and applies all transactions from block n to a temporary, in-memory copy of the state. Only if all transactions in block n are valid under the Arkade Asset rules and applied successfully is the new state committed to disk as `state_n.json`. If any transaction fails, the indexer MUST NOT advance its state or write `state_n.json` (i.e., block n is not applied by the indexer).
 
 ### Rollback on Reorganization
 
@@ -344,7 +352,7 @@ If a blockchain reorganization occurs, the external process monitoring the block
 2.  **Reload**: The indexer then loads the state from the previous block (`state_100.json`), making it the current active state.
 3.  **Apply New Block**: The transactions from the new, valid block (101') can then be applied using the `applyBlock()` method, which will create a new `state_101.json`.
 
-This mechanism ensures that the indexer's view of asset ownership remains synchronized with the canonical chain, providing a robust foundation for applications built on ArkAsset.
+This mechanism ensures that the indexer's view of asset ownership remains synchronized with the canonical chain, providing a robust foundation for applications built on Arkade Assets.
 
 ### Unconfirmed Transactions
 
@@ -366,7 +374,7 @@ A teleport transfer is specified using the `TELEPORT` variant of `AssetOutput`:
 
 ```
 AssetOutput := oneof {
-  0x01 LOCAL    { o: u16, amt: u64 }                    # output within same transaction
+  0x01 LOCAL    { o: u32, amt: u64 }                    # output within same transaction
   0x02 TELEPORT { commitment: bytes32, amt: u64 }# output to external transaction via commitment
 }
 ```
@@ -458,11 +466,6 @@ In the Arkade context:
 This mechanism ensures that Arkade Assets work seamlessly within Arkade's batch swap architecture while maintaining the protocol's trust-minimized properties.
 
 ---
-
-
-
-<div style="page-break-after: always;"></div>
-
 
 # Arkade Script Opcodes
 
@@ -779,11 +782,6 @@ let group = tx.assetGroups.find(assetId);
 require(group != null, "Asset not found");
 require(group.control == expectedControlId, "Wrong control asset");
 ```
-
-
-<div style="page-break-after: always;"></div>
-
-
 # Arkade Asset Transaction Examples
 
 ---
@@ -814,7 +812,7 @@ flowchart LR
 
 - **Group[1] (New Asset A):**
   - `AssetId`: Omitted (fresh issuance, new ID is `(this_txid, 1)`)
-  - `Issuance.ControlAsset`: `BY_ID { assetid: {txidC, gidxC} }` (points to asset C)
+  - `ControlAsset`: `BY_ID { assetid: {txidC, gidxC} }` (points to asset C)
   - `Outputs`: `(o:1, amt:500), (o:2, amt:500)`
   - *Result: Σout > Σin, fresh issuance is valid because control asset C is present in Group[0].*
 
@@ -838,9 +836,9 @@ const payload: Packet = {
       outputs: [{ type: 'LOCAL', o: 0, amt: 1n }]
     },
     // Group[1] Token: A fresh issuance, controlled by group 0.
+    // AssetId is omitted, which indicates this is a genesis (fresh asset).
     {
-     
-      controlAsset: { gidx: 0 }, // References Group[0] implicitly
+      controlAsset: { gidx: 0 }, // References Group[0]
       metadata: { name: 'Token A' },
       immutable: false,
       inputs: [],
@@ -1421,11 +1419,6 @@ flowchart LR
   TX --> o0
   TX --> o1
 ```
-
-
-<div style="page-break-after: always;"></div>
-
-
 # ArkadeKitties: A Trustless Collectible Game on Ark
 
 This document outlines the design for ArkadeKitties, a decentralized game for collecting and breeding unique digital cats, built entirely on the Ark protocol using Arkade Assets and Arkade Script.
@@ -1757,8 +1750,3 @@ To ensure fair and unpredictable breeding, we introduce entropy using a **commit
 3.  **Reveal**: The user reveals their secret `salt` and combines it with the `oracleRand`. This combined, unpredictable value is used as entropy to generate the new Kitty's genome.
 
 This two-step process ensures that neither the user nor the oracle can unilaterally control the outcome, making the breeding process genuinely random.
-
-
-<div style="page-break-after: always;"></div>
-
-
