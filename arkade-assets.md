@@ -305,10 +305,10 @@ When an asset is first created (i.e., the `AssetId` is omitted from the group), 
 
 **2. Metadata Updates**
 
-To update the metadata for an existing asset, the transaction packet must include specific groups:
+To update the metadata for an existing asset, the asset MUST have a control asset. The transaction packet must include specific groups:
 
 - A `Group` for the asset being updated (e.g., asset B) must be present. This group may have no inputs or outputs, as the transaction is simply updating metadata.
-- If the asset has a control asset (e.g., asset A), then both assets (A and B) MUST be included as groups in the packet. The control asset (A) must be spent to authorize the update. 
+- A `Group` for the control asset (e.g., asset A) must also be included. Both assets (A and B) MUST be included as groups in the packet, and the control asset (A) must be spent to authorize the update. 
 
 - **Rule**: If the `Group.Metadata` field is present in a group for an *existing* asset, it is treated as an update. The transaction is only valid if one of its inputs spends the UTXO that currently holds the **Control Asset** for the asset being updated.
 - **Behavior**: An indexer will replace the asset's existing metadata with the new key-value pairs. This allows any entity with spending rights of the control asset to change or add metadata fields over time.
