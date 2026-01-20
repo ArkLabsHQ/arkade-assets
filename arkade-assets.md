@@ -164,22 +164,20 @@ AssetRef  := oneof {
 
 AssetInput := oneof {
                0x01 LOCAL    { i: u32, amt: u64 }                    # input from same transaction's prevouts
-             | 0x02 TELEPORT { amt: u64, witness: TeleportWitness }  # input from teleport; commitment = sha256(witness)
+             | 0x02 TELEPORT { vin: u32, amt: u64, witness: TeleportWitness }  # input from teleport
              }
+# Note: For TELEPORT inputs, `vin` represents the index of the output within the
+# intent transaction's asset group (i.e., the j-th output in that group's Outputs array).
 
-TeleportWitness := varint(script_len) || payment_script || varint(nonce_len) || nonce
+TeleportWitness := {
+  intent_txid : bytes32        # intent transaction id that created the teleport output
+  script       : bytes          # The script that was committed to in the teleport output
+}
 
 AssetOutput := oneof {
                0x01 LOCAL    { o: u32, amt: u64 }                    # output within same transaction
-             | 0x02 TELEPORT { commitment: bytes32, amt: u64 }       # output to external transaction via commitment 
+             | 0x02 TELEPORT { script: bytes, amt: u64 }             # output to external transaction via script commitment
              }
-
-TeleportCommitment := sha256(payment_script || nonce)
-
-# Nonce specification:
-#   - Size: arbitrary length, up to 32 bytes maximum
-#   - Generation: CSPRNG or deterministic derivation (e.g., HMAC from secret + counter) suggested
-#   - Uniqueness: Implementation concern, not protocol-enforced
 ```
 This hybrid approach balances compactness for the `Group` structure with the flexibility of type markers for variant data types.
 
@@ -197,31 +195,26 @@ This hybrid approach balances compactness for the `Group` structure with the fle
 
 ## 5. Teleport System
 
-### Commitment-Based Teleports
+### Script-Based Teleports
 
-To solve the circular dependency problem, teleports use a **commitment hash** instead of direct txid references:
+Teleports use a **script commitment** to project assets to outputs in external transactions:
 
 1. **Creating a Teleport Output**:
-   - Creates `AssetOutput::TELEPORT { commitment, amt }` with 
-     - Sender generates: `commitment = sha256(payment_script || nonce)` and
-     - `payment_script` is the receiver's scriptPubKey that gets committed to (for future claiming)
+   - Creates `AssetOutput::TELEPORT { script, amt }` where:
+     - `script` is the receiver's scriptPubKey that the assets are committed to
+     - `amt` is the amount of assets being teleported
 
 2. **Claiming a Teleport Input**:
-   - Receiver creates a transaction with an output containing the `payment_script`
-   - References the teleport via `AssetInput::TELEPORT { amt, witness }` (commitment derived from witness)
-   - The `witness` field contains the preimage data, encoded as:
-     ```
-     TeleportWitness := varint(script_len) || payment_script || varint(nonce_len) || nonce
-     ```
-   - This length-prefixed format enables Arkade Script introspection and future extensibility
-   - The teleported assets MUST be assigned, in aggregate amount, to one or more LOCAL outputs whose `scriptPubKey` equals the committed `payment_script`. Indexers MUST verify the sum across those outputs >= claimed amount.
+   - Receiver creates a transaction with an output containing the committed `script`
+   - References the teleport via `AssetInput::TELEPORT { amt, witness }` where `witness` contains:
+     - `intent_txid`: The intent transaction id that created the teleport output
+     - `Script`: The script that was committed to in the teleport output
+   - The teleported assets MUST be assigned, in aggregate amount, to one or more LOCAL outputs whose `scriptPubKey` equals the committed `script`. Indexers MUST verify the sum across those outputs >= claimed amount.
    - Arkade Signer (offchain) / Indexer (onchain) validates:
-     - `sha256(payment_script || nonce) == commitment`
-     - Transaction contains at least one output with the exact `payment_script`
-     - Commitment matches an entry in pending teleports with the correct `source_txid`
-     - The assets flow matches the aggregate amount of outputs carrying the committed `payment_script`
-
-The nonce used in a teleport commitment must be communicated to the intended claimant out-of-band. Knowledge of both `payment_script` and `nonce` is required for claiming a teleport input. 
+     - `intent_txid` matches a known pending teleport intent transaction
+     - `Script` matches the script committed in that teleport output
+     - Transaction contains at least one output with the exact `script`
+     - The assets flow matches the aggregate amount of outputs carrying the committed `script`
 
 3. **Validation Rules**:
    - Arkade Signer (offchain) / Indexer (onchain) tracks pending teleports via commitment hash.
@@ -248,15 +241,14 @@ The nonce used in a teleport commitment must be communicated to the intended cla
 The Signer/Indexer maintains:
 ```
 PendingTeleport := {
-  commitment: bytes32,
-  source_txid: bytes32,
-  source_height: u64,      // Block height where the teleport was created. Optional for arkade-native teleports.
+  intent_txid: bytes32,    // The transaction that created the teleport index: u32, // Index of the telport Output in the 
+  script: bytes,           // The committed script
   assetid: AssetId,
   amount: u64
 }
 ```
 
-When a teleport output is created, the indexer stores the source_txid, group index, and its output index. When claiming, the indexer uses the commitment to look up these values.
+When a teleport output is created, the indexer stores the source_txid, script, group index, and output index. When claiming, the indexer uses the `intent_txid` and `Script` from the witness to look up and validate the pending teleport.
 
 ---
 

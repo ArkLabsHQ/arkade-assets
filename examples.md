@@ -397,30 +397,30 @@ const payload: Packet = {
 
 ---
 
-## H) Teleport (Commit-Reveal)
+## H) Teleport (Commit-Claim)
 
-The teleport system allows assets to be moved between transactions without a direct UTXO dependency. It's a two-stage process: commit and reveal.
+The teleport system allows assets to be moved between batches without a direct UTXO dependency. It's a two-stage process: commit and reveal.
 
-1.  **Commit Transaction:** An asset is spent into a `TELEPORT` output, which contains a commitment hash (e.g., `sha256(secret)`).
-2.  **Reveal Transaction:** A second, unrelated transaction can claim the teleported asset by providing the secret pre-image in a `TELEPORT` input. The hash of the pre-image must match the commitment hash.
+1.  **Commit Transaction:** An asset is spent into a `TELEPORT` output, which commits to a destination script (the receiver's scriptPubKey).
+2.  **Claim Transaction:** A second transaction claims the teleported asset by providing a `TELEPORT` input with a witness containing the `intent_txid` and the committed `Script`.
 
 ### Transaction Diagrams
 
 **Commit Transaction**
 ```mermaid
 flowchart LR
-  CommitTX[(Commit TX)]
-  i0["input 0<br/>• T: 100"] --> CommitTX
-  CommitTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• hash(secret)"]
+  IntentTX[(Intent TX)]
+  i0["input 0<br/>• T: 100"] --> IntentTX
+  IntentTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• script: receiver_pubkey"]
 
 ```
 
-**Reveal Transaction**
+**Claim Transaction**
 ```mermaid
 flowchart LR
-  RevealTX[(Reveal TX)]
-  i_teleport["Teleport Input<br/>• T: 100<br/>• secret"] --> RevealTX
-  RevealTX --> o0["output 0<br/>• T: 100"]
+  ClaimTX[(Claim TX)]
+  i_teleport["Teleport Input<br/>• T: 100<br/>• witness: {intent_txid, Script}"] --> ClaimTX
+  ClaimTX --> o0["output 0<br/>• T: 100<br/>• script: receiver_pubkey"]
 
 ```
 
@@ -429,22 +429,21 @@ flowchart LR
 **Commit Packet**
 - `AssetId`: `(txidT, gidxT)`
 - `Inputs`: `(i:0, amt:100)`
-- `Outputs`: `(type:TELEPORT, amt:100, hash:sha256(secret))`
+- `Outputs`: `(type:TELEPORT, amt:100, script:receiver_script)`
 
 **Reveal Packet**
 - `AssetId`: `(txidT, gidxT)`
-- `Inputs`: `(type:TELEPORT, amt:100, preimg:secret)`
+- `Inputs`: `(type:TELEPORT, vin:0, amt:100, witness:{intent_txid, Script})`
 - `Outputs`: `(o:0, amt:100)`
 
 ### Code Example (TypeScript)
 
 ```typescript
 import { Packet } from './arkade-assets-codec';
-import { createHash } from 'crypto';
 
 const teleportAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
-const secret = Buffer.from('this is a secret pre-image');
-const commitHash = createHash('sha256').update(secret).digest();
+const receiverScript = Buffer.from('76a914...88ac', 'hex'); // Example P2PKH script
+const intent_txid = Buffer.alloc(32); // Will be the hash of the intent transaction
 
 // Commit Transaction Payload
 const commitPayload: Packet = {
@@ -452,17 +451,25 @@ const commitPayload: Packet = {
     {
       assetId: teleportAssetId,
       inputs: [{ type: 'LOCAL', i: 0, amt: 100n }],
-      outputs: [{ type: 'TELEPORT', hash: commitHash, amt: 100n }],
+      outputs: [{ type: 'TELEPORT', script: receiverScript, amt: 100n }],
     },
   ]
 };
 
-// Reveal Transaction Payload
-const revealPayload: Packet = {
+// Claim Transaction Payload
+const claimPayload: Packet = {
   groups: [
     {
       assetId: teleportAssetId,
-      inputs: [{ type: 'TELEPORT', preimg: secret, amt: 100n }],
+      inputs: [{
+        type: 'TELEPORT',
+        vin: 0,  // Index of the output in the intent tx's asset group (the teleport output)
+        amt: 100n,
+        witness: {
+          intent_txid: intent_txid,  // Hash of the intent transaction
+          script: receiverScript       // The script committed in the teleport output
+        }
+      }],
       outputs: [{ type: 'LOCAL', o: 0, amt: 100n }],
     },
   ]
