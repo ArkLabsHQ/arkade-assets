@@ -466,3 +466,59 @@ This mechanism ensures that Arkade Assets work seamlessly within Arkade's batch 
 
 ---
 
+## 10. Arkade Defense Transactions and Asset Validation
+
+Arkade uses special transaction types for operator security that are **exempt from Arkade Asset validation**. These transactions protect the operator's BTC liquidity and do not represent asset operations.
+
+### Checkpoint Transactions
+
+[Checkpoint transactions](https://docs.arkadeos.com/arkd/server-security/checkpoint-txs) are defense mechanisms that allow the Arkade operator to protect against griefing attacks on preconfirmed VTXOs.
+
+**Asset Validation Rules:**
+- Checkpoint transactions **do not require** an Arkade Asset packet
+- A checkpoint transaction without an asset packet **does not burn assets**
+- The indexer treats checkpoints as transitory BTC-layer state, not asset state changes
+
+### Forfeit Transactions
+
+[Forfeit transactions](https://docs.arkadeos.com/arkd/server-security/forfeit-txs) allow the operator to reclaim funds when detecting double-spend attempts on settled VTXOs.
+
+**Asset Validation Rules:**
+- Forfeit transactions **do not require** an Arkade Asset packet
+- A forfeit transaction without an asset packet **does not burn assets**
+- Forfeits are operator defense mechanisms, not user-initiated asset transfers
+
+### Virtual Mempool Unrolls and Asset Continuity
+
+When the Arkade virtual mempool partially unrolls (broadcasts transactions to Bitcoin in sequence), asset ownership follows the **tip of the virtual mempool**, not intermediate states.
+
+**Example:** Consider a virtual mempool chain `A → B → C` where an asset is transferred from `A` to `C`:
+
+```
+Virtual Mempool State (preconfirmed):
+  A (asset origin) → B → C (asset destination)
+```
+
+If the chain partially unrolls to `B` (transactions `A` and `B` are broadcast to Bitcoin, `C` remains preconfirmed):
+
+```
+After Partial Unroll to B:
+  A, B (broadcast to Bitcoin)
+  C (remains in virtual mempool, preconfirmed)
+```
+
+**Asset Resolution:**
+- The asset is **still owned by `C`** in the virtual mempool
+- The indexer treats the tip of the virtual mempool (`C`) as the current unspent asset location
+- The partial unroll does not revert asset ownership to the on-chain state at `A` or `B`
+- This ensures asset continuity even during defense scenarios where partial unrolls occur
+
+### Rationale
+
+These rules ensure that:
+1. **Operator defense is not penalized**: Broadcasting checkpoints/forfeits doesn't accidentally burn user assets
+2. **Asset state is deterministic**: The Bitcoin-confirmed state is the source of truth after unrolls
+3. **No asset packet overhead**: Defense transactions remain lightweight and fast to broadcast
+
+---
+
