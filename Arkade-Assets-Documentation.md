@@ -164,13 +164,14 @@ AssetRef  := oneof {
 
 AssetInput := oneof {
                0x01 LOCAL    { i: u32, amt: u64 }                    # input from same transaction's prevouts
-             | 0x02 TELEPORT { vin: u32, amt: u64, witness: TeleportWitness }  # input from teleport
+             | 0x02 TELEPORT { amt: u64, witness: TeleportWitness }  # input from teleport
              }
-# Note: For TELEPORT inputs, `vin` represents the index of the output within the
-# intent transaction's asset group (i.e., the j-th output in that group's Outputs array).
+# Note: For TELEPORT inputs, the witness identifies the lockup transaction and the
+# output within that transaction's asset group that created the teleport.
 
 TeleportWitness := {
-  intent_txid : bytes32        # Hash of the intent transaction that created the teleport output
+  txid : bytes32        # Hash of the lockup transaction that created the teleport output
+  index : u32           # Index of the teleport output in the lockup transaction's asset group
   Script       : bytes          # The script that was committed to in the teleport output
 }
 
@@ -207,11 +208,12 @@ Teleports use a **script commitment** to project assets to outputs in external t
 2. **Claiming a Teleport Input**:
    - Receiver creates a transaction with an output containing the committed `script`
    - References the teleport via `AssetInput::TELEPORT { amt, witness }` where `witness` contains:
-     - `intent_txid`: The hash of the intent transaction that created the teleport output
+     - `txid`: The hash of the lockup transaction that created the teleport output
+     - `index`: The index of the teleport output within the lockup transaction's asset group
      - `Script`: The script that was committed to in the teleport output
    - The teleported assets MUST be assigned, in aggregate amount, to one or more LOCAL outputs whose `scriptPubKey` equals the committed `script`. Indexers MUST verify the sum across those outputs >= claimed amount.
    - Arkade Signer (offchain) / Indexer (onchain) validates:
-     - `intent_txid` matches a known pending teleport intent transaction
+     - `txid` matches a known pending teleport lockup transaction
      - `Script` matches the script committed in that teleport output
      - Transaction contains at least one output with the exact `script`
      - The assets flow matches the aggregate amount of outputs carrying the committed `script`
@@ -241,7 +243,7 @@ Teleports use a **script commitment** to project assets to outputs in external t
 The Signer/Indexer maintains:
 ```
 PendingTeleport := {
-  source_txid: bytes32,    // The transaction that created the teleport output (intent_txid)
+  source_txid: bytes32,    // The transaction that created the teleport output (txid)
   source_height: u64,      // Block height where the teleport was created. Optional for arkade-native teleports.
   script: bytes,           // The committed script
   assetid: AssetId,
@@ -249,7 +251,7 @@ PendingTeleport := {
 }
 ```
 
-When a teleport output is created, the indexer stores the source_txid, script, group index, and output index. When claiming, the indexer uses the `intent_txid` and `Script` from the witness to look up and validate the pending teleport.
+When a teleport output is created, the indexer stores the source_txid, script, group index, and output index. When claiming, the indexer uses the `txid`, `index`, and `Script` from the witness to look up and validate the pending teleport.
 
 ---
 
@@ -373,15 +375,15 @@ AssetOutput := oneof {
 
 When processing a transaction with teleport outputs:
 
-1. **Intent Transaction**: Assets are deducted from inputs and committed to a destination script
-2. **Claim Transaction**: Must reference the intent transaction and provide matching script
+1. **Lockup Transaction**: Assets are deducted from inputs and committed to a destination script
+2. **Claim Transaction**: Must reference the lockup transaction and provide matching script
 3. **Asset Materialization**: Assets appear at the target outpoint once both transactions confirm
 
 ### Validation Rules
 
 - **Balance Conservation**: `sum(LOCAL inputs) + sum(TELEPORT inputs) = sum(LOCAL outputs) + sum(TELEPORT outputs)`
-- **Teleport Acknowledgment**: Claim transaction MUST include `TELEPORT` input with matching `intent_txid` and `Script`
-- **Exact Matching**: Teleport input witness must reference the correct intent transaction and script
+- **Teleport Acknowledgment**: Claim transaction MUST include `TELEPORT` input with matching `txid` and `Script`
+- **Exact Matching**: Teleport input witness must reference the correct lockup transaction and script
 - **Atomicity**: For on-chain sources, both source and target transactions MUST be confirmed (with N conf on the source as configured). For Arkade-native sources, claims MAY be processed immediately by Arkade.
 - **No Double-Spend**: Assets cannot be both transferred locally and teleported in the same group
 
@@ -557,11 +559,11 @@ All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
 | Type | `type_u8` | Additional Data |
 |------|-----------|-----------------|
 | LOCAL input | `0x01` | `input_index_u32 amount_u64` |
-| TELEPORT input | `0x02` | `vin_u32 amount_u64 intent_tx_hash_32 script` |
+| TELEPORT input | `0x02` | `witness_index_u32 amount_u64 intent_tx_hash_32 script` |
 | LOCAL output | `0x01` | `output_index_u32 amount_u64` |
 | TELEPORT output | `0x02` | `script amount_u64` |
 
-**Note:** TELEPORT inputs include `vin` (the index of the output in the intent transaction's asset group), plus the full witness (intent_txid, Script) for validation. TELEPORT outputs return the committed script.
+**Note:** TELEPORT inputs include the witness (index, txid, Script) for validation; the witness.index identifies the teleport output inside the lockup transaction's asset group. TELEPORT outputs return the committed script.
 
 ### Cross-Output (Multi-Asset per UTXO)
 
@@ -586,9 +588,9 @@ All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
 | `OP_INSPECTGROUPTELEPORTOUTCOUNT` `k` | → `n` | Number of TELEPORT outputs in group `k` |
 | `OP_INSPECTGROUPTELEPORTOUT` `k j` | → `script amount_u64` | j-th TELEPORT output in group `k` |
 | `OP_INSPECTGROUPTELEPORTINCOUNT` `k` | → `n` | Number of TELEPORT inputs in group `k` |
-| `OP_INSPECTGROUPTELEPORTIN` `k j` | → `vin_u32 amount_u64 intent_tx_hash_32 script` | j-th TELEPORT input in group `k` |
+| `OP_INSPECTGROUPTELEPORTIN` `k j` | → `witness_index_u32 amount_u64 intent_tx_hash_32 script` | j-th TELEPORT input in group `k` |
 
-**Note:** TELEPORT inputs return `vin` (index of the output in the intent tx's asset group), plus the full witness (intent_txid, Script) for validation against pending teleports.
+**Note:** TELEPORT inputs return the witness (index, txid, Script); the witness.index identifies which output in the lockup transaction's asset group created the teleport.
 
 ---
 
@@ -663,9 +665,9 @@ tx.assetGroups[k].inputs[j].amount     // Asset amount (u64)
 tx.assetGroups[k].inputs[j].inputIndex // Transaction input index (u16)
 
 // TELEPORT input additional fields:
-tx.assetGroups[k].inputs[j].vin        // Index of the output in the intent tx's asset group (u32)
-tx.assetGroups[k].inputs[j].intent_txid // Hash of the intent transaction (bytes32)
-tx.assetGroups[k].inputs[j].script     // The committed script (bytes)
+tx.assetGroups[k].inputs[j].witness.index   // Index of the output in the lockup tx's asset group (u32)
+tx.assetGroups[k].inputs[j].witness.txid    // Hash of the lockup transaction (bytes32)
+tx.assetGroups[k].inputs[j].witness.script   // The committed script (bytes)
 
 // AssetOutput (from OP_INSPECTASSETGROUP k j 1)
 tx.assetGroups[k].outputs[j].type       // LOCAL (0x01) or TELEPORT (0x02)
@@ -739,12 +741,16 @@ struct AssetInputLocal {
     amount: bigint
 }
 
+struct TeleportWitness {
+    txid: bytes32,
+    index: int,
+    script: bytes
+}
+
 struct AssetInputTeleport {
     type: AssetInputType,    // TELEPORT
-    vin: int,                // Index of the output in the intent tx's asset group
-    intent_txid: bytes32,   // Hash of the intent transaction that created the teleport
-    script: bytes,           // The script committed to in the teleport output
     amount: bigint
+    witness: TeleportWitness
 }
 
 // Output types
@@ -774,17 +780,17 @@ To verify a teleport input references a valid pending teleport:
 
 ```javascript
 // The teleport input provides:
-// - intent_txid: the source transaction that created the teleport
+// - txid: the source transaction that created the teleport
 // - script: the script that was committed to
 
 // The indexer/signer validates:
-// 1. intent_txid matches a known pending teleport
+// 1. txid matches a known pending teleport
 // 2. script matches the script in that teleport output
 // 3. The claiming transaction has an output with matching script
 
 let teleportIn = tx.assetGroups[k].inputs[j];
 require(teleportIn.type == TELEPORT);
-// intent_txid and script are validated by the indexer against pending teleports
+// txid and script are validated by the indexer against pending teleports
 ```
 
 ### Checking Asset Presence
@@ -1232,21 +1238,21 @@ const payload: Packet = {
 
 ---
 
-## H) Teleport (Intent and Claim)
+## H) Teleport (Lockup & Claim)
 
-The teleport system allows assets to be moved between transactions without a direct UTXO dependency. It's a two-stage process: intent and claim.
+The teleport system allows assets to be moved between transactions without a direct UTXO dependency. It's a two-stage process: lockup and claim.
 
-1.  **Intent Transaction:** An asset is spent into a `TELEPORT` output, which commits to a destination script (the receiver's scriptPubKey).
-2.  **Claim Transaction:** A second transaction claims the teleported asset by providing a `TELEPORT` input with a witness containing the `intent_txid` and the committed `Script`.
+1.  **Lockup Transaction:** An asset is spent into a `TELEPORT` output, which commits to a destination script (the receiver's scriptPubKey).
+2.  **Claim Transaction:** A second transaction claims the teleported asset by providing a `TELEPORT` input with a witness containing the `index`, `txid`, and the committed `Script`.
 
 ### Transaction Diagrams
 
-**Intent Transaction**
+**Lockup Transaction**
 ```mermaid
 flowchart LR
-  IntentTX[(Intent TX)]
-  i0["input 0<br/>• T: 100"] --> IntentTX
-  IntentTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• script: receiver_pubkey"]
+  LockupTX[(Lockup TX)]
+  i0["input 0<br/>• T: 100"] --> LockupTX
+  LockupTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• script: receiver_pubkey"]
 
 ```
 
@@ -1254,21 +1260,21 @@ flowchart LR
 ```mermaid
 flowchart LR
   ClaimTX[(Claim TX)]
-  i_teleport["Teleport Input<br/>• T: 100<br/>• witness: {intent_txid, Script}"] --> ClaimTX
+  i_teleport["Teleport Input<br/>• T: 100<br/>• witness: {index, txid, Script}"] --> ClaimTX
   ClaimTX --> o0["output 0<br/>• T: 100<br/>• script: receiver_pubkey"]
 
 ```
 
 ### Asset Packet Definitions
 
-**Intent Packet**
+**Lockup Packet**
 - `AssetId`: `(txidT, gidxT)`
 - `Inputs`: `(i:0, amt:100)`
 - `Outputs`: `(type:TELEPORT, amt:100, script:receiver_script)`
 
 **Claim Packet**
 - `AssetId`: `(txidT, gidxT)`
-- `Inputs`: `(type:TELEPORT, vin:0, amt:100, witness:{intent_txid, Script})`
+- `Inputs`: `(type:TELEPORT, amt:100, witness:{index:0, txid, Script})`
 - `Outputs`: `(o:0, amt:100)`
 
 ### Code Example (TypeScript)
@@ -1278,10 +1284,10 @@ import { Packet } from './arkade-assets-codec';
 
 const teleportAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
 const receiverScript = Buffer.from('76a914...88ac', 'hex'); // Example P2PKH script
-const intent_txid = Buffer.alloc(32); // Will be the hash of the intent transaction
+const txid = Buffer.alloc(32); // Will be the hash of the lockup transaction
 
-// Intent Transaction Payload
-const intentPayload: Packet = {
+// Lockup Transaction Payload
+const lockupPayload: Packet = {
   groups: [
     {
       assetId: teleportAssetId,
@@ -1298,10 +1304,10 @@ const claimPayload: Packet = {
       assetId: teleportAssetId,
       inputs: [{
         type: 'TELEPORT',
-        vin: 0,  // Index of the output in the intent tx's asset group (the teleport output)
         amt: 100n,
         witness: {
-          intent_txid: intent_txid,  // Hash of the intent transaction
+          index: 0,  // Index of the output in the lockup tx's asset group (the teleport output)
+          txid: txid,  // Hash of the lockup transaction
           script: receiverScript       // The script committed in the teleport output
         }
       }],

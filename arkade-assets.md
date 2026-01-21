@@ -164,13 +164,14 @@ AssetRef  := oneof {
 
 AssetInput := oneof {
                0x01 LOCAL    { i: u32, amt: u64 }                    # input from same transaction's prevouts
-             | 0x02 TELEPORT { vin: u32, amt: u64, witness: TeleportWitness }  # input from teleport
+             | 0x02 TELEPORT { amt: u64, witness: TeleportWitness }  # input from teleport
              }
-# Note: For TELEPORT inputs, `vin` represents the index of the output within the
-# intent transaction's asset group (i.e., the j-th output in that group's Outputs array).
+# Note: For TELEPORT inputs, the witness identifies the lockup transaction
+# and the output within that transaction's asset group that created the teleport.
 
 TeleportWitness := {
-  intent_txid : bytes32        # intent transaction id that created the teleport output
+  txid : bytes32        # lockup transaction id that created the teleport output
+  index : u32           # Index of the teleport output in the lockup transaction's asset group
   script       : bytes          # The script that was committed to in the teleport output
 }
 
@@ -207,11 +208,12 @@ Teleports use a **script commitment** to project assets to outputs in external t
 2. **Claiming a Teleport Input**:
    - Receiver creates a transaction with an output containing the committed `script`
    - References the teleport via `AssetInput::TELEPORT { amt, witness }` where `witness` contains:
-     - `intent_txid`: The intent transaction id that created the teleport output
+     - `txid`: The lockup transaction id that created the teleport output
+     - `index`: The index of the teleport output within the lockup transaction's asset group
      - `Script`: The script that was committed to in the teleport output
    - The teleported assets MUST be assigned, in aggregate amount, to one or more LOCAL outputs whose `scriptPubKey` equals the committed `script`. Indexers MUST verify the sum across those outputs >= claimed amount.
    - Arkade Signer (offchain) / Indexer (onchain) validates:
-     - `intent_txid` matches a known pending teleport intent transaction
+    - `txid` matches a known pending teleport lockup transaction
      - `Script` matches the script committed in that teleport output
      - Transaction contains at least one output with the exact `script`
      - The assets flow matches the aggregate amount of outputs carrying the committed `script`
@@ -241,14 +243,14 @@ Teleports use a **script commitment** to project assets to outputs in external t
 The Signer/Indexer maintains:
 ```
 PendingTeleport := {
-  intent_txid: bytes32,    // The transaction that created the teleport index: u32, // Index of the telport Output in the 
+  txid: bytes32,    // The transaction that created the teleport index: u32, // Index of the telport Output in the 
   script: bytes,           // The committed script
   assetid: AssetId,
   amount: u64
 }
 ```
 
-When a teleport output is created, the indexer stores the source_txid, script, group index, and output index. When claiming, the indexer uses the `intent_txid` and `Script` from the witness to look up and validate the pending teleport.
+When a teleport output is created, the indexer stores the source_txid, script, group index, and output index. When claiming, the indexer uses the `txid`, `index`, and `Script` from the witness to look up and validate the pending teleport.
 
 ---
 
@@ -513,4 +515,3 @@ These rules ensure that:
 3. **No asset packet overhead**: Defense transactions remain lightweight and fast to broadcast
 
 ---
-

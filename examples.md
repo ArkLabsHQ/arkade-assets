@@ -397,21 +397,21 @@ const payload: Packet = {
 
 ---
 
-## H) Teleport (Commit-Claim)
+## H) Teleport (Lockup & Claim)
 
-The teleport system allows assets to be moved between batches without a direct UTXO dependency. It's a two-stage process: commit and reveal.
+The teleport system allows assets to be moved between batches without a direct UTXO dependency. It's a two-stage process: lockup and claim.
 
-1.  **Commit Transaction:** An asset is spent into a `TELEPORT` output, which commits to a destination script (the receiver's scriptPubKey).
-2.  **Claim Transaction:** A second transaction claims the teleported asset by providing a `TELEPORT` input with a witness containing the `intent_txid` and the committed `Script`.
+1.  **Lockup Transaction:** An asset is spent into a `TELEPORT` output, which commits to a destination script (the receiver's scriptPubKey).
+2.  **Claim Transaction:** A second transaction claims the teleported asset by providing a `TELEPORT` input with a witness containing the `index`, `txid`, and the committed `Script`.
 
 ### Transaction Diagrams
 
-**Commit Transaction**
+**Lockup Transaction**
 ```mermaid
 flowchart LR
-  IntentTX[(Intent TX)]
-  i0["input 0<br/>• T: 100"] --> IntentTX
-  IntentTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• script: receiver_pubkey"]
+  LockupTX[(Lockup TX)]
+  i0["input 0<br/>• T: 100"] --> LockupTX
+  LockupTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• script: receiver_pubkey"]
 
 ```
 
@@ -419,21 +419,21 @@ flowchart LR
 ```mermaid
 flowchart LR
   ClaimTX[(Claim TX)]
-  i_teleport["Teleport Input<br/>• T: 100<br/>• witness: {intent_txid, Script}"] --> ClaimTX
+  i_teleport["Teleport Input<br/>• T: 100<br/>• witness: {index, txid, Script}"] --> ClaimTX
   ClaimTX --> o0["output 0<br/>• T: 100<br/>• script: receiver_pubkey"]
 
 ```
 
 ### Asset Packet Definitions
 
-**Commit Packet**
+**Lockup Packet**
 - `AssetId`: `(txidT, gidxT)`
 - `Inputs`: `(i:0, amt:100)`
 - `Outputs`: `(type:TELEPORT, amt:100, script:receiver_script)`
 
-**Reveal Packet**
+**Claim Packet**
 - `AssetId`: `(txidT, gidxT)`
-- `Inputs`: `(type:TELEPORT, vin:0, amt:100, witness:{intent_txid, Script})`
+- `Inputs`: `(type:TELEPORT, amt:100, witness:{index:0, txid, Script})`
 - `Outputs`: `(o:0, amt:100)`
 
 ### Code Example (TypeScript)
@@ -443,10 +443,10 @@ import { Packet } from './arkade-assets-codec';
 
 const teleportAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
 const receiverScript = Buffer.from('76a914...88ac', 'hex'); // Example P2PKH script
-const intent_txid = Buffer.alloc(32); // Will be the hash of the intent transaction
+const txid = Buffer.alloc(32); // Will be the hash of the lockup transaction
 
-// Commit Transaction Payload
-const commitPayload: Packet = {
+// Lockup Transaction Payload
+const lockupPayload: Packet = {
   groups: [
     {
       assetId: teleportAssetId,
@@ -463,10 +463,10 @@ const claimPayload: Packet = {
       assetId: teleportAssetId,
       inputs: [{
         type: 'TELEPORT',
-        vin: 0,  // Index of the output in the intent tx's asset group (the teleport output)
         amt: 100n,
         witness: {
-          intent_txid: intent_txid,  // Hash of the intent transaction
+          index: 0,  // Index of the output in the lockup tx's asset group (the teleport output)
+          txid: txid,  // Hash of the lockup transaction
           script: receiverScript       // The script committed in the teleport output
         }
       }],
