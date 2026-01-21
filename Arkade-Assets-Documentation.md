@@ -164,22 +164,21 @@ AssetRef  := oneof {
 
 AssetInput := oneof {
                0x01 LOCAL    { i: u32, amt: u64 }                    # input from same transaction's prevouts
-             | 0x02 TELEPORT { amt: u64, witness: TeleportWitness }  # input from teleport; commitment = sha256(witness)
+             | 0x02 TELEPORT { amt: u64, witness: TeleportWitness }  # input from teleport
              }
+# Note: For TELEPORT inputs, the witness identifies the lockup transaction and the
+# output within that transaction's asset group that created the teleport.
 
-TeleportWitness := varint(script_len) || payment_script || varint(nonce_len) || nonce
+TeleportWitness := {
+  txid : bytes32        # Hash of the lockup transaction that created the teleport output
+  index : u32           # Index of the teleport output in the lockup transaction's asset group
+  Script       : bytes          # The script that was committed to in the teleport output
+}
 
 AssetOutput := oneof {
                0x01 LOCAL    { o: u32, amt: u64 }                    # output within same transaction
-             | 0x02 TELEPORT { commitment: bytes32, amt: u64 }       # output to external transaction via commitment 
+             | 0x02 TELEPORT { script: bytes, amt: u64 }             # output to external transaction via script commitment
              }
-
-TeleportCommitment := sha256(payment_script || nonce)
-
-# Nonce specification:
-#   - Size: arbitrary length, up to 32 bytes maximum
-#   - Generation: CSPRNG or deterministic derivation (e.g., HMAC from secret + counter) suggested
-#   - Uniqueness: Implementation concern, not protocol-enforced
 ```
 This hybrid approach balances compactness for the `Group` structure with the flexibility of type markers for variant data types.
 
@@ -197,31 +196,27 @@ This hybrid approach balances compactness for the `Group` structure with the fle
 
 ## 5. Teleport System
 
-### Commitment-Based Teleports
+### Script-Based Teleports
 
-To solve the circular dependency problem, teleports use a **commitment hash** instead of direct txid references:
+Teleports use a **script commitment** to project assets to outputs in external transactions:
 
 1. **Creating a Teleport Output**:
-   - Creates `AssetOutput::TELEPORT { commitment, amt }` with 
-     - Sender generates: `commitment = sha256(payment_script || nonce)` and
-     - `payment_script` is the receiver's scriptPubKey that gets committed to (for future claiming)
+   - Creates `AssetOutput::TELEPORT { script, amt }` where:
+     - `script` is the receiver's scriptPubKey that the assets are committed to
+     - `amt` is the amount of assets being teleported
 
 2. **Claiming a Teleport Input**:
-   - Receiver creates a transaction with an output containing the `payment_script`
-   - References the teleport via `AssetInput::TELEPORT { amt, witness }` (commitment derived from witness)
-   - The `witness` field contains the preimage data, encoded as:
-     ```
-     TeleportWitness := varint(script_len) || payment_script || varint(nonce_len) || nonce
-     ```
-   - This length-prefixed format enables Arkade Script introspection and future extensibility
-   - The teleported assets MUST be assigned, in aggregate amount, to one or more LOCAL outputs whose `scriptPubKey` equals the committed `payment_script`. Indexers MUST verify the sum across those outputs >= claimed amount.
+   - Receiver creates a transaction with an output containing the committed `script`
+   - References the teleport via `AssetInput::TELEPORT { amt, witness }` where `witness` contains:
+     - `txid`: The hash of the lockup transaction that created the teleport output
+     - `index`: The index of the teleport output within the lockup transaction's asset group
+     - `Script`: The script that was committed to in the teleport output
+   - The teleported assets MUST be assigned, in aggregate amount, to one or more LOCAL outputs whose `scriptPubKey` equals the committed `script`. Indexers MUST verify the sum across those outputs >= claimed amount.
    - Arkade Signer (offchain) / Indexer (onchain) validates:
-     - `sha256(payment_script || nonce) == commitment`
-     - Transaction contains at least one output with the exact `payment_script`
-     - Commitment matches an entry in pending teleports with the correct `source_txid`
-     - The assets flow matches the aggregate amount of outputs carrying the committed `payment_script`
-
-The nonce used in a teleport commitment must be communicated to the intended claimant out-of-band. Knowledge of both `payment_script` and `nonce` is required for claiming a teleport input. 
+     - `txid` matches a known pending teleport lockup transaction
+     - `Script` matches the script committed in that teleport output
+     - Transaction contains at least one output with the exact `script`
+     - The assets flow matches the aggregate amount of outputs carrying the committed `script`
 
 3. **Validation Rules**:
    - Arkade Signer (offchain) / Indexer (onchain) tracks pending teleports via commitment hash.
@@ -248,15 +243,15 @@ The nonce used in a teleport commitment must be communicated to the intended cla
 The Signer/Indexer maintains:
 ```
 PendingTeleport := {
-  commitment: bytes32,
-  source_txid: bytes32,
+  source_txid: bytes32,    // The transaction that created the teleport output (txid)
   source_height: u64,      // Block height where the teleport was created. Optional for arkade-native teleports.
+  script: bytes,           // The committed script
   assetid: AssetId,
   amount: u64
 }
 ```
 
-When a teleport output is created, the indexer stores the source_txid, group index, and its output index. When claiming, the indexer uses the commitment to look up these values.
+When a teleport output is created, the indexer stores the source_txid, script, group index, and output index. When claiming, the indexer uses the `txid`, `index`, and `Script` from the witness to look up and validate the pending teleport.
 
 ---
 
@@ -374,21 +369,21 @@ A teleport transfer is specified using the `TELEPORT` variant of `AssetOutput`:
 ```
 AssetOutput := oneof {
   0x01 LOCAL    { o: u32, amt: u64 }                    # output within same transaction
-  0x02 TELEPORT { commitment: bytes32, amt: u64 }# output to external transaction via commitment
+  0x02 TELEPORT { script: bytes, amt: u64 }             # output to external transaction via script commitment
 }
 ```
 
 When processing a transaction with teleport outputs:
 
-1. **Source Transaction**: Assets are deducted from inputs and "sent" to the external target
-2. **Target Transaction**: Must exist and be confirmed for the teleport to be valid
+1. **Lockup Transaction**: Assets are deducted from inputs and committed to a destination script
+2. **Claim Transaction**: Must reference the lockup transaction and provide matching script
 3. **Asset Materialization**: Assets appear at the target outpoint once both transactions confirm
 
 ### Validation Rules
 
 - **Balance Conservation**: `sum(LOCAL inputs) + sum(TELEPORT inputs) = sum(LOCAL outputs) + sum(TELEPORT outputs)`
-- **Teleport Acknowledgment**: Target transaction MUST include `TELEPORT` input matching source's `TELEPORT` output
-- **Exact Matching**: Teleport input/output pairs must have identical `txid`, `vout`, `amt`, and `AssetId`
+- **Teleport Acknowledgment**: Claim transaction MUST include `TELEPORT` input with matching `txid` and `Script`
+- **Exact Matching**: Teleport input witness must reference the correct lockup transaction and script
 - **Atomicity**: For on-chain sources, both source and target transactions MUST be confirmed (with N conf on the source as configured). For Arkade-native sources, claims MAY be processed immediately by Arkade.
 - **No Double-Spend**: Assets cannot be both transferred locally and teleported in the same group
 
@@ -563,12 +558,12 @@ All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
 
 | Type | `type_u8` | Additional Data |
 |------|-----------|-----------------|
-| LOCAL input | `0x01` | `input_index_u16 amount_u64` |
-| TELEPORT input | `0x02` | `payment_script nonce amount_u64` |
-| LOCAL output | `0x01` | `output_index_u16 amount_u64` |
-| TELEPORT output | `0x02` | `commitment_32 amount_u64` |
+| LOCAL input | `0x01` | `input_index_u32 amount_u64` |
+| TELEPORT input | `0x02` | `witness_index_u32 amount_u64 intent_tx_hash_32 script` |
+| LOCAL output | `0x01` | `output_index_u32 amount_u64` |
+| TELEPORT output | `0x02` | `script amount_u64` |
 
-**Note:** TELEPORT inputs return the full witness (payment_script, nonce) since the packet contains the preimage. TELEPORT outputs only return the commitment since the witness is not yet revealed.
+**Note:** TELEPORT inputs include the witness (index, txid, Script) for validation; the witness.index identifies the teleport output inside the lockup transaction's asset group. TELEPORT outputs return the committed script.
 
 ### Cross-Output (Multi-Asset per UTXO)
 
@@ -591,11 +586,11 @@ All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
 | Opcode | Stack Effect | Description |
 |--------|--------------|-------------|
 | `OP_INSPECTGROUPTELEPORTOUTCOUNT` `k` | → `n` | Number of TELEPORT outputs in group `k` |
-| `OP_INSPECTGROUPTELEPORTOUT` `k j` | → `commitment_32 amount_u64` | j-th TELEPORT output in group `k` |
+| `OP_INSPECTGROUPTELEPORTOUT` `k j` | → `script amount_u64` | j-th TELEPORT output in group `k` |
 | `OP_INSPECTGROUPTELEPORTINCOUNT` `k` | → `n` | Number of TELEPORT inputs in group `k` |
-| `OP_INSPECTGROUPTELEPORTIN` `k j` | → `payment_script nonce amount_u64` | j-th TELEPORT input witness in group `k` |
+| `OP_INSPECTGROUPTELEPORTIN` `k j` | → `witness_index_u32 amount_u64 intent_tx_hash_32 script` | j-th TELEPORT input in group `k` |
 
-**Note:** TELEPORT inputs return the full witness (payment_script, nonce) since the packet contains the preimage. The commitment can be computed as `sha256(payment_script || nonce)`.
+**Note:** TELEPORT inputs return the witness (index, txid, Script); the witness.index identifies which output in the lockup transaction's asset group created the teleport.
 
 ---
 
@@ -670,9 +665,9 @@ tx.assetGroups[k].inputs[j].amount     // Asset amount (u64)
 tx.assetGroups[k].inputs[j].inputIndex // Transaction input index (u16)
 
 // TELEPORT input additional fields:
-tx.assetGroups[k].inputs[j].paymentScript // Payment script (bytes)
-tx.assetGroups[k].inputs[j].nonce      // Teleport nonce (bytes32)
-tx.assetGroups[k].inputs[j].commitment // → sha256(paymentScript || nonce)
+tx.assetGroups[k].inputs[j].witness.index   // Index of the output in the lockup tx's asset group (u32)
+tx.assetGroups[k].inputs[j].witness.txid    // Hash of the lockup transaction (bytes32)
+tx.assetGroups[k].inputs[j].witness.script   // The committed script (bytes)
 
 // AssetOutput (from OP_INSPECTASSETGROUP k j 1)
 tx.assetGroups[k].outputs[j].type       // LOCAL (0x01) or TELEPORT (0x02)
@@ -686,7 +681,7 @@ tx.assetGroups[k].outputs[j].scriptPubKey
                            //   OP_INSPECTOUTPUTSCRIPTPUBKEY
 
 // TELEPORT output additional fields:
-tx.assetGroups[k].outputs[j].commitment // Teleport commitment (bytes32)
+tx.assetGroups[k].outputs[j].script    // The committed script (bytes)
 ```
 
 ### Cross-Input Asset Lookups
@@ -746,12 +741,16 @@ struct AssetInputLocal {
     amount: bigint
 }
 
+struct TeleportWitness {
+    txid: bytes32,
+    index: int,
+    script: bytes
+}
+
 struct AssetInputTeleport {
     type: AssetInputType,    // TELEPORT
-    paymentScript: bytes,    // Variable-length payment script (from witness)
-    nonce: bytes32,          // 32-byte random nonce (from witness)
     amount: bigint
-    // commitment = sha256(paymentScript || nonce)
+    witness: TeleportWitness
 }
 
 // Output types
@@ -765,7 +764,7 @@ struct AssetOutputLocal {
 
 struct AssetOutputTeleport {
     type: AssetOutputType,   // TELEPORT
-    commitment: bytes32,     // sha256(payment_script || nonce)
+    script: bytes,           // The committed script (receiver's scriptPubKey)
     amount: bigint
 }
 
@@ -775,20 +774,23 @@ struct AssetOutputTeleport {
 
 ## Common Patterns
 
-### Verifying Teleport Commitment
+### Verifying Teleport Input
 
-The teleport commitment is `sha256(payment_script || nonce)`. To verify:
+To verify a teleport input references a valid pending teleport:
 
 ```javascript
-// Using streaming SHA256 (efficient for variable-length data)
-let state = OP_SHA256INITIALIZE;
-state = OP_SHA256UPDATE(state, paymentScript);
-state = OP_SHA256UPDATE(state, nonce);
-let computedCommitment = OP_SHA256FINALIZE(state);
-require(computedCommitment == expectedCommitment);
+// The teleport input provides:
+// - txid: the source transaction that created the teleport
+// - script: the script that was committed to
 
-// Or simply:
-require(sha256(paymentScript + nonce) == expectedCommitment);
+// The indexer/signer validates:
+// 1. txid matches a known pending teleport
+// 2. script matches the script in that teleport output
+// 3. The claiming transaction has an output with matching script
+
+let teleportIn = tx.assetGroups[k].inputs[j];
+require(teleportIn.type == TELEPORT);
+// txid and script are validated by the indexer against pending teleports
 ```
 
 ### Checking Asset Presence
@@ -1236,72 +1238,79 @@ const payload: Packet = {
 
 ---
 
-## H) Teleport (Commit-Reveal)
+## H) Teleport (Lockup & Claim)
 
-The teleport system allows assets to be moved between transactions without a direct UTXO dependency. It's a two-stage process: commit and reveal.
+The teleport system allows assets to be moved between transactions without a direct UTXO dependency. It's a two-stage process: lockup and claim.
 
-1.  **Commit Transaction:** An asset is spent into a `TELEPORT` output, which contains a commitment hash (e.g., `sha256(secret)`).
-2.  **Reveal Transaction:** A second, unrelated transaction can claim the teleported asset by providing the secret pre-image in a `TELEPORT` input. The hash of the pre-image must match the commitment hash.
+1.  **Lockup Transaction:** An asset is spent into a `TELEPORT` output, which commits to a destination script (the receiver's scriptPubKey).
+2.  **Claim Transaction:** A second transaction claims the teleported asset by providing a `TELEPORT` input with a witness containing the `index`, `txid`, and the committed `Script`.
 
 ### Transaction Diagrams
 
-**Commit Transaction**
+**Lockup Transaction**
 ```mermaid
 flowchart LR
-  CommitTX[(Commit TX)]
-  i0["input 0<br/>• T: 100"] --> CommitTX
-  CommitTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• hash(secret)"]
+  LockupTX[(Lockup TX)]
+  i0["input 0<br/>• T: 100"] --> LockupTX
+  LockupTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• script: receiver_pubkey"]
 
 ```
 
-**Reveal Transaction**
+**Claim Transaction**
 ```mermaid
 flowchart LR
-  RevealTX[(Reveal TX)]
-  i_teleport["Teleport Input<br/>• T: 100<br/>• secret"] --> RevealTX
-  RevealTX --> o0["output 0<br/>• T: 100"]
+  ClaimTX[(Claim TX)]
+  i_teleport["Teleport Input<br/>• T: 100<br/>• witness: {index, txid, Script}"] --> ClaimTX
+  ClaimTX --> o0["output 0<br/>• T: 100<br/>• script: receiver_pubkey"]
 
 ```
 
 ### Asset Packet Definitions
 
-**Commit Packet**
+**Lockup Packet**
 - `AssetId`: `(txidT, gidxT)`
 - `Inputs`: `(i:0, amt:100)`
-- `Outputs`: `(type:TELEPORT, amt:100, hash:sha256(secret))`
+- `Outputs`: `(type:TELEPORT, amt:100, script:receiver_script)`
 
-**Reveal Packet**
+**Claim Packet**
 - `AssetId`: `(txidT, gidxT)`
-- `Inputs`: `(type:TELEPORT, amt:100, preimg:secret)`
+- `Inputs`: `(type:TELEPORT, amt:100, witness:{index:0, txid, Script})`
 - `Outputs`: `(o:0, amt:100)`
 
 ### Code Example (TypeScript)
 
 ```typescript
 import { Packet } from './arkade-assets-codec';
-import { createHash } from 'crypto';
 
 const teleportAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
-const secret = Buffer.from('this is a secret pre-image');
-const commitHash = createHash('sha256').update(secret).digest();
+const receiverScript = Buffer.from('76a914...88ac', 'hex'); // Example P2PKH script
+const txid = Buffer.alloc(32); // Will be the hash of the lockup transaction
 
-// Commit Transaction Payload
-const commitPayload: Packet = {
+// Lockup Transaction Payload
+const lockupPayload: Packet = {
   groups: [
     {
       assetId: teleportAssetId,
       inputs: [{ type: 'LOCAL', i: 0, amt: 100n }],
-      outputs: [{ type: 'TELEPORT', hash: commitHash, amt: 100n }],
+      outputs: [{ type: 'TELEPORT', script: receiverScript, amt: 100n }],
     },
   ]
 };
 
-// Reveal Transaction Payload
-const revealPayload: Packet = {
+// Claim Transaction Payload
+const claimPayload: Packet = {
   groups: [
     {
       assetId: teleportAssetId,
-      inputs: [{ type: 'TELEPORT', preimg: secret, amt: 100n }],
+      inputs: [{
+        type: 'TELEPORT',
+        amt: 100n,
+        witness: {
+          index: 0,  // Index of the output in the lockup tx's asset group (the teleport output)
+          txid: txid,  // Hash of the lockup transaction
+          script: receiverScript       // The script committed in the teleport output
+        }
+      }],
       outputs: [{ type: 'LOCAL', o: 0, amt: 100n }],
     },
   ]
