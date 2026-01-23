@@ -280,6 +280,7 @@ contract BreedReveal(
     }
 
 }
+```
 
 ## 5. On-Chain vs. Off-Chain Logic
 
