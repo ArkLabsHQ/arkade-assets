@@ -6,13 +6,8 @@
 
 The Arkade Asset protocol is designed to operate in a hybrid environment, with assets moving seamlessly between off-chain Arkade transactions and on-chain Bitcoin transactions. This architecture imposes a critical requirement: a unified view of the asset state.
 
-<<<<<<< HEAD
 -   The **Arkade Signer** must be aware of on-chain events. To validate transactions that interact with on-chain assets (e.g., after a unilateral exit or collaborative-exit), the Signer must have access to the state of the Bitcoin blockchain. It effectively acts as a private indexer for the user.
 -  The **Arkade Indexer** must be aware of Arkade-native transactions. To present a complete and accurate public ledger of assets, the indexer must be able to ingest and validate state transitions that occur within the Arkade system, by observing all relevant Arkade-native transactions.
-=======
--   The **Arkade Signer** (off-chain) must be aware of on-chain events. To validate transactions that interact with on-chain assets (e.g., after a unilateral exit or collaborative-exit), the Signer must have access to the state of the Bitcoin blockchain. It effectively acts as a private indexer for the user.
--   An **On-chain Indexer** must be aware of Arkade-native transactions. To present a complete and accurate public ledger of assets, the indexer must be able to ingest and validate state transitions that occur within the Arkade system, by observing all relevant Arkade-native transactions.
->>>>>>> origin/intent
 
 This ensures that an asset's history is unbroken and its ownership is unambiguous, regardless of how it is transferred. Arkade Asset V1 is a UTXO-native asset system for Bitcoin transactions inspired by Runes and Liquid Assets.
 
@@ -98,13 +93,8 @@ Packet := {
 ```
 Group := {
   AssetId?      : AssetId          # absent => fresh asset (AssetId* = (this_txid, group_index))
-<<<<<<< HEAD
-  ControlAsset? : AssetRef         # Genesis only: Defines the control asset for reissuance/metadata updates.
-  Metadata?     : map<string, string> # Initial metadata at genesis, or new metadata for updates.
-=======
   ControlAsset? : AssetRef         # Genesis only: Defines the control asset for reissuance.
   Metadata?     : map<string, string> # Genesis only: Immutable metadata set at asset creation.
->>>>>>> origin/intent
   InputCount    : varuint
   Inputs[InputCount]  : AssetInput
   OutputCount   : varuint
@@ -112,22 +102,7 @@ Group := {
 }
 ```
 
-<<<<<<< HEAD
 ### 3.1. Encoding Details
-=======
-### 3.1. Genesis and Metadata Rules
-
-- **Genesis (Fresh Assets)**: A fresh asset is created when `AssetId` is absent. The absence of `AssetId` itself indicates genesis — no separate marker is needed.
-  - `ControlAsset` may be set to define the control asset for future reissuance (minting).
-  - `Metadata` may be set to define immutable metadata for the asset.
-  - If `ControlAsset` is omitted, no future token reissuance is possible.
-
-- **Metadata is Immutable**: Metadata can only be set at genesis and cannot be changed after. This eliminates race conditions in the 2-step async execution model and simplifies validation.
-
-- **Genesis-Only Fields**: The `ControlAsset` and `Metadata` fields are only valid at genesis (when `AssetId` is absent). They **must not** be present for existing assets.
-
-### 3.2. Encoding Details
->>>>>>> origin/intent
 
 While the specification uses a logical TLV (Type-Length-Value) model, the canonical binary encoding employs specific optimizations for compactness.
 
@@ -137,11 +112,7 @@ Instead of using a type marker for each optional field within a `Group`, the imp
 
 -   `bit 0 (0x01)`: `AssetId` is present.
 -   `bit 1 (0x02)`: `ControlAsset` is present (genesis only).
-<<<<<<< HEAD
--   `bit 2 (0x04)`: `Metadata` is present.
-=======
 -   `bit 2 (0x04)`: `Metadata` is present (genesis only).
->>>>>>> origin/intent
 -   `bits 3-7`: Reserved for future protocol extensions. Parsers MUST ignore these bits if set.
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
@@ -152,10 +123,6 @@ For data structures that represent one of several variants (a `oneof` structure)
 
 -   **`AssetRef`**: `0x01` for `BY_ID`, `0x02` for `BY_GROUP`.
 -   **`AssetInput`**: `0x01` for `LOCAL`, `0x02` for `INTENT`.
-<<<<<<< HEAD
-=======
--   **`AssetOutput`**: `0x01` for `LOCAL`, `0x02` for `INTENT`.
->>>>>>> origin/intent
 
 Type marker values are interpreted in the context of the structure being parsed; identical numeric values in different structures do not conflict.
 
@@ -172,20 +139,10 @@ AssetRef  := oneof {
 
 AssetInput := oneof {
                0x01 LOCAL  { i: u32, amt: u64 }                  # input from same transaction's prevouts
-<<<<<<< HEAD
              | 0x02 INTENT { txid: bytes32, o: u32, amt: u64 }  # output from intent transaction
              }
 
 AssetOutput := { o: u32, amt: u64 }   # output within same transaction
-=======
-             | 0x02 INTENT { txid: bytes32, o: u32, amt: u64 }  # claim from intent output
-             }
-
-AssetOutput := oneof {
-               0x01 LOCAL  { o: u32, amt: u64 }   # output within same transaction
-             | 0x02 INTENT { o: u32, amt: u64 }   # parked for later claim by commitment tx
-             }
->>>>>>> origin/intent
 ```
 
 > **Note:** The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
@@ -195,7 +152,6 @@ AssetOutput := oneof {
 
 ## 4. Intent Asset Flow
 
-<<<<<<< HEAD
 ```
 Old Asset VTXO → [Intent TX] → [Commitment TX] → New Asset VTXOs
 ```
@@ -257,107 +213,6 @@ Asset packet:
 - **Output Index Validation**: Asset Output indices MUST reference valid VTXOs. Out-of-bound indices render the transaction INVALID.
 
 - **Cross Amount Validation**: Total Output amount MUST be less than or equal to Total Input amount, unless Control Asset Is Provided
-=======
-- **Fresh asset:** if `AssetId` omitted, AssetId\* = `(this_txid, group_index)`.
-- **Existing asset:** if `AssetId` present, AssetId\* = that literal `(txid,gidx)`.
-- **Control reference:**
-  - BY\_ID → literal `(txid,gidx)`
-  - BY\_GROUP{g} → `(this_txid, g)`
-
----
-
-## 5. Intent System
-
-The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
-
-### Intent Outputs
-
-An `AssetOutput::INTENT { o, amt }` parks assets at a specific output index of the intent transaction:
-
-- `o`: The output index (vout) in the same transaction
-- `amt`: The amount of assets being parked
-
-Assets parked in INTENT outputs are locked until the intent is included in a batch or dropped.
-
-### Intent Inputs
-
-An `AssetInput::INTENT { txid, o, amt }` claims assets from a pending intent output:
-
-- `txid`: The intent transaction ID
-- `o`: The output index within that intent
-- `amt`: The amount being claimed (must match exactly)
-
-### Transaction Flow
-
-```
-Old VTXO → [Intent TX] → Intent Outputs → [Commitment TX] → New VTXOs / On-chain
-           LOCAL inputs   INTENT outputs   INTENT inputs     LOCAL outputs
-```
-
-**Intent Transaction:**
-- LOCAL inputs spend assets from existing VTXO
-- INTENT outputs park assets at vouts in the same tx
-- Bitcoin outputs (vouts) specify the destinations
-- BIP322-signed message specifies which vouts are collaborative exits vs VTXOs
-- Standard delta rules apply
-
-**Commitment Transaction:**
-- INTENT inputs claim from pending intents
-- LOCAL outputs place assets at final destinations:
-  - **Collaborative exits**: Aggregated in the commitment tx's asset packet
-  - **VTXOs**: Each batch leaf holds its own asset packet for the VTXOs it creates
-
-### Composability
-
-A single intent can mix collaborative exits and VTXOs. The BIP322-signed configuration message embedded in the intent specifies the type of each output:
-
-```
-Intent TX:
-  vout 0 → collaborative exit (on-chain)
-  vout 1 → new VTXO
-  vout 2 → new VTXO
-
-Asset packet:
-  INTENT { o: 0, amt: 50 }   # 50 tokens to on-chain
-  INTENT { o: 1, amt: 30 }   # 30 tokens to VTXO
-  INTENT { o: 2, amt: 20 }   # 20 tokens to VTXO
-```
-
-### Validation Rules
-
-- **Zero Amount Validation**: All asset amounts MUST be greater than zero. An input or output with `amount = 0` is INVALID.
-- **Input Amount Validation**: Validators MUST verify that declared input amounts match the actual asset balances of referenced UTXOs.
-- **Output Index Validation**: Output indices MUST reference valid transaction outputs. Out-of-bound indices render the transaction INVALID.
-- **Intent Input Validation**: When processing an INTENT input `{ txid, o, amt }`:
-  1. Lookup pending intent by `txid`
-  2. Verify output at index `o` exists and is unclaimed
-  3. Verify `amt` matches the intent output's amount exactly
-  4. Mark intent output as claimed
-
-### Intent Lifecycle
-
-- **Submitted**: VTXOs and assets are locked
-- **Included in batch**: Assets transfer to new VTXOs or on-chain outputs
-- **Dropped**: Assets unlocked, free to use again
-
-User may revoke an intent, or operator may cancel it—in both cases assets are unlocked.
-
-No confirmation delays—intents are fully Arkade-native.
-
-### Intent State Tracking
-
-The Signer maintains:
-```
-PendingIntent := {
-  txid: bytes32,       # Intent transaction ID
-  o: u32,              # Output index
-  assetId: AssetId,    # The asset type
-  amt: u64             # Amount parked
-}
-```
-
-When an intent is submitted, the signer stores the intent details. When a commitment transaction claims intents, the signer validates each INTENT input against pending intents and marks them as claimed.
->>>>>>> origin/intent
 
 
 ## 6. Examples
@@ -393,23 +248,6 @@ In summary, **Proof of Genesis** establishes historical origin, a one-time, stat
 
 Arkade Asset supports a flexible, onchain key-value model for metadata in the asset group. Well-known keys (e.g., `name`, `ticker`, `decimals`) can be defined in a separate standards document, but any key-value pair is valid.
 
-<<<<<<< HEAD
-When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Metadata` map in the `Group` defines its initial, base metadata. This is useful for defining core, permanent properties.
-
-
-**Metadata Introspection**
-
-To enable trustless validation of asset properties without incurring high overhead, an indexer MUST make a hash of an asset's current metadata available to the script execution environment.
-
-- **Rule**: When building the transaction context for script execution, for each `Group` in the packet, the indexer must compute and expose a `metadataHash` for the corresponding asset. 
-
-- **Behavior**: A smart contract can then verify a specific piece of metadata by requiring the user to provide the full metadata as a function argument. The contract hashes the provided data and compares it against the `metadataHash` from the introspection API.
-
-- **Hashing Mechanism**: The `metadataHash` is the **Merkle root** of the asset's metadata. This provides a secure and efficient way to verify individual key-value pairs without processing the full metadata set onchain.
-  - **Leaf Generation**: The leaves of the Merkle tree are the `sha256` hashes of the canonically encoded key-value pairs. The pairs MUST be sorted by key before hashing to ensure a deterministic root.
-  - **Canonical Entry Format**: `leaf[i] = sha256(varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])`
-  - **Verification**: Contracts verify metadata by recomputing the expected Merkle root from user-provided values. Since Arkade Script does not include loop opcodes, contracts must know their metadata schema at compile time. For fixed schemas (e.g., 2-4 known keys), contracts can hardcode the leaf prefixes and tree structure, recomputing the root directly rather than verifying arbitrary Merkle proof paths. See the ArkadeKitties example, which uses a fixed 2-leaf tree for `genome` and `generation` fields.
-=======
 Metadata is defined at genesis and is **immutable**—it cannot be changed after the asset is created. This design eliminates race conditions in the 2-step async execution model and ensures metadata can be verified without indexer state injection.
 
 **Genesis Metadata**
@@ -428,7 +266,6 @@ The `metadataHash` is the **Merkle root** of the asset's metadata, computed at g
 Contracts verify metadata by recomputing the expected Merkle root from user-provided values. Since metadata is immutable, contracts can trust that the genesis metadata hash is the current and permanent hash.
 
 Since Arkade Script does not include loop opcodes, contracts must know their metadata schema at compile time. For fixed schemas (e.g., 2-4 known keys), contracts can hardcode the leaf prefixes and tree structure, recomputing the root directly. See the ArkadeKitties example, which uses a fixed 2-leaf tree for `genome` and `generation` fields.
->>>>>>> origin/intent
 
 ---
 
@@ -468,37 +305,11 @@ The indexer implementation described here operates on **confirmed blocks only**.
 
 ---
 
-<<<<<<< HEAD
 
 
 
 ## 8. Arkade Batch Swap Support
 
-=======
-## 8. Intent Transfers
-
-Intent transfers enable assets to move between VTXOs across batches, and from VTXOs to on-chain outputs (collaborative exits).
-
-### Balance Conservation
-
-```
-sum(LOCAL inputs) + sum(INTENT inputs) + delta = sum(LOCAL outputs) + sum(INTENT outputs)
-```
-
-Where `delta` follows standard rules (mints require control asset; burns are permissionless).
-
-### Asset Identity Preservation
-
-Assets transferred via intents maintain their original `(genesis_txid, group_index)` identity. This ensures:
-- Asset transfers remain traceable to their genesis
-- Control asset relationships are preserved
-- Metadata history is maintained across intent transfers
-
----
-
-## 9. Arkade Batch Swap Support
-
->>>>>>> origin/intent
 The intent system provides native support for Arkade's batch swap mechanism, enabling seamless asset continuity across VTXO transitions.
 
 ### The Batch Swap Challenge
