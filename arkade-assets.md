@@ -6,16 +6,11 @@
 
 The Arkade Asset protocol is designed to operate in a hybrid environment, with assets moving seamlessly between off-chain Arkade transactions and on-chain Bitcoin transactions. This architecture imposes a critical requirement: a unified view of the asset state.
 
--   The **Arkade Signer** (off-chain) must be aware of on-chain events. To validate transactions that interact with on-chain assets (e.g., after a unilateral exit or collaborative-exit), the Signer must have access to the state of the Bitcoin blockchain. It effectively acts as a private indexer for the user.
--   An **On-chain Indexer** must be aware of Arkade-native transactions. To present a complete and accurate public ledger of assets, the indexer must be able to ingest and validate state transitions that occur within the Arkade system, by observing all relevant Arkade-native transactions.
+-   The **Arkade Signer** must be aware of on-chain events. To validate transactions that interact with on-chain assets (e.g., after a unilateral exit or collaborative-exit), the Signer must have access to the state of the Bitcoin blockchain. It effectively acts as a private indexer for the user.
+-  The **Arkade Indexer** must be aware of Arkade-native transactions. To present a complete and accurate public ledger of assets, the indexer must be able to ingest and validate state transitions that occur within the Arkade system, by observing all relevant Arkade-native transactions.
 
-This ensures that an asset's history is unbroken and its ownership is unambiguous, regardless of how it is transferred.
+This ensures that an asset's history is unbroken and its ownership is unambiguous, regardless of how it is transferred. Arkade Asset V1 is a UTXO-native asset system for Bitcoin transactions inspired by Runes and Liquid Assets.
 
-Arkade Asset V1 is a UTXO-native asset system for Bitcoin transactions inspired by Runes and Liquid Assets.
-
-Within Arkade, it requires no offchain indexers to track asset state: simply parsing the transaction is enough to observe and validate asset transfers. This is possible because the Arkade Signer's cosigning guard validates before cosigning, along with its TEE assurances for verifiable honesty.
-
-However, if used onchain, indexers/validators are required to analyse the chain (both utxos and vtxos) and disregard invalid asset transactions.
 
 ### Assets and Asset IDs
 
@@ -29,7 +24,7 @@ Assets are identified by an Asset ID, which is always a pair: `AssetId: (genesis
 - `group_index` = the index of the asset group inside that genesis transaction
 
 There are two cases: 
-- **Fresh mint**. If an Asset Group omits its Asset ID, it creates a new asset. It's Asset ID is `(this_txid, group_index)`, where `this_txid`is the current transaction hash. Since this is the genesis transaction for that asset, `this_txid = genesis_txid`.
+- **Fresh mint**. If an Asset Group omits its Asset ID, it creates a new asset. Its Asset ID is `(this_txid, group_index)`, where `this_txid` is the current transaction hash. Since this is the genesis transaction for that asset, `this_txid = genesis_txid`.
 - **Existing asset**. If the Asset Group specifies an Asset ID, it refers back to an already minted asset `(genesis_txid, group_index)`  
 
 ### Control Assets and Reissuance
@@ -42,13 +37,13 @@ If an asset did not specify a control asset at genesis, it cannot be reissued an
 
 **Control Asset Rules:**
 
-1. **No Self-Reference**: An asset MUST NOT reference itself as its own control asset. A `BY_GROUP` reference where `gidx` equals the current group index is INVALID.
+1. **No Self-Reference**: An asset MUST NOT reference itself as its own control asset.
 
-2. **Single-Level Control**: Only the direct control asset is required for reissuance or metadata updates. Control is NOT transitive - if Asset A is controlled by Asset B, and Asset B is controlled by Asset C, reissuing Asset A requires only Asset B (not C).
+2. **Single-Level Control**: Only the direct control asset is required for reissuance. Control is NOT transitive - if Asset A is controlled by Asset B, and Asset B is controlled by Asset C, reissuing Asset A requires only Asset B (not C).
 
 3. **Supply Finalization**: Burning the control asset (explicitly or by not including it in outputs) permanently locks the controlled asset's supply and prevents future metadata updates. This is intentional behavior for finalizing an asset's supply. Existing tokens continue to circulate normally.
 
-Arkade Asset V1 supports projecting multiple assets unto a single UTXO, and BTC amounts are orthogonal and not included in asset accounting.
+Arkade Asset V1 supports projecting multiple assets onto a single UTXO, and BTC amounts are orthogonal and not included in asset accounting.
 
 Asset amounts are atomic units, and supply management is managed through UTXO spending conditions.
 
@@ -100,7 +95,6 @@ Group := {
   AssetId?      : AssetId          # absent => fresh asset (AssetId* = (this_txid, group_index))
   ControlAsset? : AssetRef         # Genesis only: Defines the control asset for reissuance/metadata updates.
   Metadata?     : map<string, string> # Initial metadata at genesis, or new metadata for updates.
-  Immutable?    : bool             # Genesis only: If true, metadata cannot be changed after genesis.
   InputCount    : varuint
   Inputs[InputCount]  : AssetInput
   OutputCount   : varuint
@@ -108,23 +102,7 @@ Group := {
 }
 ```
 
-### 3.1. Genesis and Metadata Rules
-
-- **Genesis (Fresh Assets)**: A fresh asset is created when `AssetId` is absent. The absence of `AssetId` itself indicates genesis — no separate marker is needed.
-  - `ControlAsset` may be set to define the control asset for future reissuance and metadata updates.
-  - `Metadata` may be set to define initial metadata.
-  - If `Immutable` is set to `true`, the asset's metadata can never be changed after genesis.
-  - If `ControlAsset` is omitted, no future token reissuance or metadata updates are possible. In this case, the asset is **implicitly immutable** regardless of whether `Immutable` is set—there is no authorization mechanism to permit changes.
-
-- **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
-  1. Include the asset's `ControlAsset` as an input to authorize the change.
-  2. Include the new `Metadata` property in the asset group, containing the full new metadata map.
-
-- **Genesis-Only Fields**: The `ControlAsset` and `Immutable` fields are only valid at genesis (when `AssetId` is absent). They **must not** be present for existing assets.
-
-- **Covenant Enforcement**: The validity of a metadata transition (e.g., ensuring only certain keys are changed) may be enforced by covenant scripts, which can inspect the input and output metadata hashes.
-
-### 3.2. Encoding Details
+### 3.1. Encoding Details
 
 While the specification uses a logical TLV (Type-Length-Value) model, the canonical binary encoding employs specific optimizations for compactness.
 
@@ -135,8 +113,7 @@ Instead of using a type marker for each optional field within a `Group`, the imp
 -   `bit 0 (0x01)`: `AssetId` is present.
 -   `bit 1 (0x02)`: `ControlAsset` is present (genesis only).
 -   `bit 2 (0x04)`: `Metadata` is present.
--   `bit 3 (0x08)`: `Immutable` is present (genesis only).
--   `bits 4-7`: Reserved for future protocol extensions. Parsers MUST ignore these bits if set.
+-   `bits 3-7`: Reserved for future protocol extensions. Parsers MUST ignore these bits if set.
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
 
@@ -146,7 +123,6 @@ For data structures that represent one of several variants (a `oneof` structure)
 
 -   **`AssetRef`**: `0x01` for `BY_ID`, `0x02` for `BY_GROUP`.
 -   **`AssetInput`**: `0x01` for `LOCAL`, `0x02` for `INTENT`.
--   **`AssetOutput`**: `0x01` for `LOCAL`, `0x02` for `INTENT`.
 
 Type marker values are interpreted in the context of the structure being parsed; identical numeric values in different structures do not conflict.
 
@@ -159,75 +135,40 @@ AssetRef  := oneof {
                0x01 BY_ID    { assetid: AssetId } # if existing asset
              | 0x02 BY_GROUP { gidx: u16 } # if fresh asset (does not exist yet therefore no AssetId)
              }
-# BY_GROUP forward references are ALLOWED - gidx may reference a group that appears
-# later in the packet. Validators must use two-pass processing to resolve references.
+# BY_GROUP forward references are ALLOWED - gidx may reference a group that appears later in the packet.
 
 AssetInput := oneof {
                0x01 LOCAL  { i: u32, amt: u64 }                  # input from same transaction's prevouts
-             | 0x02 INTENT { txid: bytes32, o: u32, amt: u64 }  # claim from intent output
+             | 0x02 INTENT { txid: bytes32, o: u32, amt: u64 }  # output from intent transaction
              }
 
-AssetOutput := oneof {
-               0x01 LOCAL  { o: u32, amt: u64 }   # output within same transaction
-             | 0x02 INTENT { o: u32, amt: u64 }   # parked for later claim by commitment tx
-             }
+AssetOutput := { o: u32, amt: u64 }   # output within same transaction
 ```
-This hybrid approach balances compactness for the `Group` structure with the flexibility of type markers for variant data types.
+
+> **Note:** The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
+
 
 ---
 
-## 4. Asset identity rules
-
-- **Fresh asset:** if `AssetId` omitted, AssetId\* = `(this_txid, group_index)`.
-- **Existing asset:** if `AssetId` present, AssetId\* = that literal `(txid,gidx)`.
-- **Control reference:**
-  - BY\_ID → literal `(txid,gidx)`
-  - BY\_GROUP{g} → `(this_txid, g)`
-
----
-
-## 5. Intent System
-
-The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
-
-### Intent Outputs
-
-An `AssetOutput::INTENT { o, amt }` parks assets at a specific output index of the intent transaction:
-
-- `o`: The output index (vout) in the same transaction
-- `amt`: The amount of assets being parked
-
-Assets parked in INTENT outputs are locked until the intent is included in a batch or dropped.
-
-### Intent Inputs
-
-An `AssetInput::INTENT { txid, o, amt }` claims assets from a pending intent output:
-
-- `txid`: The intent transaction ID
-- `o`: The output index within that intent
-- `amt`: The amount being claimed (must match exactly)
-
-### Transaction Flow
+## 4. Intent Asset Flow
 
 ```
-Old VTXO → [Intent TX] → Intent Outputs → [Commitment TX] → New VTXOs / On-chain
-           LOCAL inputs   INTENT outputs   INTENT inputs     LOCAL outputs
+Old Asset VTXO → [Intent TX] → [Commitment TX] → New Asset VTXOs
 ```
 
 **Intent Transaction:**
 - LOCAL inputs spend assets from existing VTXO
-- INTENT outputs park assets at vouts in the same tx
-- Bitcoin outputs (vouts) specify the destinations
+- outputs identify assets at vouts in the same tx
 - BIP322-signed message specifies which vouts are collaborative exits vs VTXOs
 - Standard delta rules apply
 
 **Commitment Transaction:**
 - INTENT inputs claim from pending intents
-- LOCAL outputs place assets at final destinations:
+- outputs place assets at final destinations:
   - **Collaborative exits**: Aggregated in the commitment tx's asset packet
   - **VTXOs**: Each batch leaf holds its own asset packet for the VTXOs it creates
 
-### Composability
+**Composability:**
 
 A single intent can mix collaborative exits and VTXOs. The BIP322-signed configuration message embedded in the intent specifies the type of each output:
 
@@ -238,53 +179,46 @@ Intent TX:
   vout 2 → new VTXO
 
 Asset packet:
-  INTENT { o: 0, amt: 50 }   # 50 tokens to on-chain
-  INTENT { o: 1, amt: 30 }   # 30 tokens to VTXO
-  INTENT { o: 2, amt: 20 }   # 20 tokens to VTXO
+  { o: 0, amt: 50 }   # 50 tokens to on-chain
+  { o: 1, amt: 30 }   # 30 tokens to VTXO
+  { o: 2, amt: 20 }   # 20 tokens to VTXO
 ```
 
-### Validation Rules
+
+**Intent Lifecycle**
+
+- Submitted: VTXOs and assets are locked
+- Included in batch: Assets transfer to new VTXOs or on-chain outputs
+- Dropped: Assets unlocked, free to use again
+
+
+## 5. Asset Group Validation Rules
+
+- **AssetID Validation**: If `AssetId` is present, it must reference a valid genesis asset transaction and group index.
+
+- **Metadata Validation**: If `Metadata` is present, `AssetId` must be absent.
+
+- **Control Asset Validation**: The `ControlAsset` property must be present in the Genesis Transaction. One of two types is verified:
+  - If `AssetId` is present, it must reference an existing Asset Group ID.
+  - If `GroupIDX` is present, `len(AssetGroups) > GroupIDX`, and `Asset Group Index != GroupIDX`.
+
 
 - **Zero Amount Validation**: All asset amounts MUST be greater than zero. An input or output with `amount = 0` is INVALID.
-- **Input Amount Validation**: Validators MUST verify that declared input amounts match the actual asset balances of referenced UTXOs.
-- **Output Index Validation**: Output indices MUST reference valid transaction outputs. Out-of-bound indices render the transaction INVALID.
-- **Intent Input Validation**: When processing an INTENT input `{ txid, o, amt }`:
-  1. Lookup pending intent by `txid`
-  2. Verify output at index `o` exists and is unclaimed
-  3. Verify `amt` matches the intent output's amount exactly
-  4. Mark intent output as claimed
 
-### Intent Lifecycle
+- **Input Amount Validation**: 
+  - LOCAL Asset Input amounts MUST match the actual asset balances of referenced VTXOs.
 
-- **Submitted**: VTXOs and assets are locked
-- **Included in batch**: Assets transfer to new VTXOs or on-chain outputs
-- **Dropped**: Assets unlocked, free to use again
+  - INTENT Asset Input amounts MUST match the actual asset balances of referenced intents transaction output.
 
-User may revoke an intent, or operator may cancel it—in both cases assets are unlocked.
+- **Output Index Validation**: Asset Output indices MUST reference valid VTXOs. Out-of-bound indices render the transaction INVALID.
 
-No confirmation delays—intents are fully Arkade-native.
+- **Cross Amount Validation**: Total Output amount MUST be less than or equal to Total Input amount, unless Control Asset Is Provided
 
-### Intent State Tracking
-
-The Signer maintains:
-```
-PendingIntent := {
-  txid: bytes32,       # Intent transaction ID
-  o: u32,              # Output index
-  assetId: AssetId,    # The asset type
-  amt: u64             # Amount parked
-}
-```
-
-When an intent is submitted, the signer stores the intent details. When a commitment transaction claims intents, the signer validates each INTENT input against pending intents and marks them as claimed.
-
----
 
 ## 6. Examples
 
 For detailed transaction examples, including diagrams, packet definitions, and code, please see [examples.md](./examples.md).
 
----
 
 ### Proof of Authenticity
 
@@ -314,30 +248,15 @@ In summary, **Proof of Genesis** establishes historical origin, a one-time, stat
 
 Arkade Asset supports a flexible, onchain key-value model for metadata in the asset group. Well-known keys (e.g., `name`, `ticker`, `decimals`) can be defined in a separate standards document, but any key-value pair is valid.
 
-Metadata is managed directly within the `Group` packet structure:
-
-**1. Genesis Metadata**
-
 When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Metadata` map in the `Group` defines its initial, base metadata. This is useful for defining core, permanent properties.
 
-**2. Metadata Updates**
 
-To update the metadata for an existing asset, the asset MUST have a control asset, and the transaction packet must include specific groups:
+**Metadata Introspection**
 
-- A `Group` for the asset being updated (e.g., asset B) must be present. This group may have no inputs or outputs, as the transaction is simply updating metadata.
-- A `Group` for the control asset (e.g., asset A) must be included. The control asset must be spent to authorize the update.
+To enable trustless validation of asset properties without incurring high overhead, an indexer MUST make a hash of an asset's current metadata available to the script execution environment.
 
-- **Rule**: If the `Metadata` field is present in a group for an *existing* asset, it is treated as an update. The transaction is only valid if one of its inputs spends the UTXO that currently holds the **Control Asset** for the asset being updated.
-- **Behavior**: An indexer will replace the asset's existing metadata with the new key-value pairs. This allows any entity with spending rights of the control asset to change or add metadata fields over time.
-- **Idempotency**: If the provided metadata is identical to the existing metadata, the transaction is still valid (assuming authorization), but no state change occurs. This allows clients to submit metadata without needing to check if it has changed.
+- **Rule**: When building the transaction context for script execution, for each `Group` in the packet, the indexer must compute and expose a `metadataHash` for the corresponding asset. 
 
-> **Note:** To authorize a metadata update, the transaction must spend the UTXO containing the control asset. To avoid burning the control asset, the transaction packet must also include a group that transfers the control asset to a new output. If the control asset is not reissued, it is destroyed, and no further updates will be possible.
-
-**3. Metadata Introspection**
-
-To enable trustless, onchain validation of asset properties without incurring high overhead, an indexer MUST make a hash of an asset's current metadata available to the script execution environment.
-
-- **Rule**: When building the transaction context for script execution, for each `Group` in the packet, the indexer must compute and expose a `metadataHash` for the corresponding asset. This hash is a read-only snapshot of the state *before* the current transaction is applied.
 - **Behavior**: A smart contract can then verify a specific piece of metadata by requiring the user to provide the full metadata as a function argument. The contract hashes the provided data and compares it against the `metadataHash` from the introspection API.
 
 - **Hashing Mechanism**: The `metadataHash` is the **Merkle root** of the asset's metadata. This provides a secure and efficient way to verify individual key-value pairs without processing the full metadata set onchain.
@@ -383,28 +302,10 @@ The indexer implementation described here operates on **confirmed blocks only**.
 
 ---
 
-## 8. Intent Transfers
 
-Intent transfers enable assets to move between VTXOs across batches, and from VTXOs to on-chain outputs (collaborative exits).
 
-### Balance Conservation
 
-```
-sum(LOCAL inputs) + sum(INTENT inputs) + delta = sum(LOCAL outputs) + sum(INTENT outputs)
-```
-
-Where `delta` follows standard rules (mints require control asset; burns are permissionless).
-
-### Asset Identity Preservation
-
-Assets transferred via intents maintain their original `(genesis_txid, group_index)` identity. This ensures:
-- Asset transfers remain traceable to their genesis
-- Control asset relationships are preserved
-- Metadata history is maintained across intent transfers
-
----
-
-## 9. Arkade Batch Swap Support
+## 8. Arkade Batch Swap Support
 
 The intent system provides native support for Arkade's batch swap mechanism, enabling seamless asset continuity across VTXO transitions.
 
@@ -457,7 +358,7 @@ This mechanism ensures that Arkade Assets work seamlessly within Arkade's batch 
 
 ---
 
-## 10. Arkade Defense Transactions and Asset Validation
+## 9. Arkade Defense Transactions and Asset Validation
 
 Arkade uses special transaction types for operator security that are **exempt from Arkade Asset validation**. These transactions protect the operator's BTC liquidity and do not represent asset operations.
 
