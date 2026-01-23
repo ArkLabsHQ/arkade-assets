@@ -55,8 +55,7 @@ const payload: Packet = {
     // AssetId is omitted, which indicates this is a genesis (fresh asset).
     {
       controlAsset: { gidx: 0 }, // References Group[0]
-      metadata: { name: 'Token A' },
-      immutable: false,
+      metadata: { name: 'Token A' },  // Immutable metadata set at genesis
       inputs: [],
       outputs: [
         { type: 'LOCAL', o: 1, amt: 500n },
@@ -337,10 +336,11 @@ const payload: Packet = {
 
 ---
 
-## G) Metadata Update
+## G) Intent (Park & Claim)
 
-To update the metadata of an asset, the transaction must spend and re-create both the asset being updated and its corresponding control asset. The new metadata is included in the asset's group, and the indexer will verify that the control asset was present to authorize the change.
+The intent system allows assets to be moved across Arkade batches. It's a two-stage process: park and claim.
 
+<<<<<<< HEAD
 ### Transaction Diagram
 
 ```mermaid
@@ -401,6 +401,8 @@ const payload: Packet = {
 
 The intent system allows assets to be moved across Arkade batches. It's a two-stage process: park and claim.
 
+=======
+>>>>>>> origin/intent
 1.  **Intent Transaction:** User parks assets in `INTENT` outputs, signaling participation in a batch swap.
 2.  **Commitment Transaction:** Operator claims parked assets via `INTENT` inputs and places them at new VTXOs via `LOCAL` outputs.
 

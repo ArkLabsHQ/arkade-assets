@@ -172,8 +172,8 @@ contract BreedCommit(
         require(sireGroup != null && dameGroup != null, "Sire and Dame assets must be spent");
         require(sireGroup.control == speciesControlId, "Sire not Species-Controlled");
         require(dameGroup.control == speciesControlId, "Dame not Species-Controlled");
-        require(sireGroup.inputMetadataHash == computeKittyMetadataRoot(sireGenome, sireGenerationBE8), "Sire metadata hash mismatch");
-        require(dameGroup.inputMetadataHash == computeKittyMetadataRoot(dameGenome, dameGenerationBE8), "Dame metadata hash mismatch");
+        require(sireGroup.metadataHash == computeKittyMetadataRoot(sireGenome, sireGenerationBE8), "Sire metadata hash mismatch");
+        require(dameGroup.metadataHash == computeKittyMetadataRoot(dameGenome, dameGenerationBE8), "Dame metadata hash mismatch");
 
         // 2. Verify Species Control asset is present and retained
         let speciesGroup = tx.assetGroups.find(speciesControlId);
@@ -257,8 +257,8 @@ contract BreedReveal(
         let newGenome = mixGenomes(sireGenome, dameGenome, entropy);
         let expectedMetadataHash = computeKittyMetadataRoot(newGenome, computeChildGeneration(sireGenerationBE8, dameGenerationBE8));
 
-        // 6. Enforce all Kitty creation rules (use outputMetadataHash for the new asset)
-        require(newKittyGroup.outputMetadataHash == expectedMetadataHash, "Child metadata hash mismatch");
+        // 6. Enforce all Kitty creation rules (verify genesis metadata hash)
+        require(newKittyGroup.metadataHash == expectedMetadataHash, "Child metadata hash mismatch");
 
     }
 
@@ -280,6 +280,7 @@ contract BreedReveal(
     }
 
 }
+```
 
 ## 5. On-Chain vs. Off-Chain Logic
 
