@@ -44,9 +44,9 @@ If an asset did not specify a control asset at genesis, it cannot be reissued an
 
 1. **No Self-Reference**: An asset MUST NOT reference itself as its own control asset. A `BY_GROUP` reference where `gidx` equals the current group index is INVALID.
 
-2. **Single-Level Control**: Only the direct control asset is required for reissuance or metadata updates. Control is NOT transitive - if Asset A is controlled by Asset B, and Asset B is controlled by Asset C, reissuing Asset A requires only Asset B (not C).
+2. **Single-Level Control**: Only the direct control asset is required for reissuance. Control is NOT transitive - if Asset A is controlled by Asset B, and Asset B is controlled by Asset C, reissuing Asset A requires only Asset B (not C).
 
-3. **Supply Finalization**: Burning the control asset (explicitly or by not including it in outputs) permanently locks the controlled asset's supply and prevents future metadata updates. This is intentional behavior for finalizing an asset's supply. Existing tokens continue to circulate normally.
+3. **Supply Finalization**: Burning the control asset (explicitly or by not including it in outputs) permanently locks the controlled asset's supply. This is intentional behavior for finalizing an asset's supply. Existing tokens continue to circulate normally.
 
 Arkade Asset V1 supports projecting multiple assets unto a single UTXO, and BTC amounts are orthogonal and not included in asset accounting.
 
@@ -98,9 +98,8 @@ Packet := {
 ```
 Group := {
   AssetId?      : AssetId          # absent => fresh asset (AssetId* = (this_txid, group_index))
-  ControlAsset? : AssetRef         # Genesis only: Defines the control asset for reissuance/metadata updates.
-  Metadata?     : map<string, string> # Initial metadata at genesis, or new metadata for updates.
-  Immutable?    : bool             # Genesis only: If true, metadata cannot be changed after genesis.
+  ControlAsset? : AssetRef         # Genesis only: Defines the control asset for reissuance.
+  Metadata?     : map<string, string> # Genesis only: Immutable metadata set at asset creation.
   InputCount    : varuint
   Inputs[InputCount]  : AssetInput
   OutputCount   : varuint
@@ -111,18 +110,13 @@ Group := {
 ### 3.1. Genesis and Metadata Rules
 
 - **Genesis (Fresh Assets)**: A fresh asset is created when `AssetId` is absent. The absence of `AssetId` itself indicates genesis — no separate marker is needed.
-  - `ControlAsset` may be set to define the control asset for future reissuance and metadata updates.
-  - `Metadata` may be set to define initial metadata.
-  - If `Immutable` is set to `true`, the asset's metadata can never be changed after genesis.
-  - If `ControlAsset` is omitted, no future token reissuance or metadata updates are possible. In this case, the asset is **implicitly immutable** regardless of whether `Immutable` is set—there is no authorization mechanism to permit changes.
+  - `ControlAsset` may be set to define the control asset for future reissuance (minting).
+  - `Metadata` may be set to define immutable metadata for the asset.
+  - If `ControlAsset` is omitted, no future token reissuance is possible.
 
-- **Metadata Updates (Existing Assets)**: To update the metadata of an existing, non-immutable asset, the transaction must:
-  1. Include the asset's `ControlAsset` as an input to authorize the change.
-  2. Include the new `Metadata` property in the asset group, containing the full new metadata map.
+- **Metadata is Immutable**: Metadata can only be set at genesis and cannot be changed after. This eliminates race conditions in the 2-step async execution model and simplifies validation.
 
-- **Genesis-Only Fields**: The `ControlAsset` and `Immutable` fields are only valid at genesis (when `AssetId` is absent). They **must not** be present for existing assets.
-
-- **Covenant Enforcement**: The validity of a metadata transition (e.g., ensuring only certain keys are changed) may be enforced by covenant scripts, which can inspect the input and output metadata hashes.
+- **Genesis-Only Fields**: The `ControlAsset` and `Metadata` fields are only valid at genesis (when `AssetId` is absent). They **must not** be present for existing assets.
 
 ### 3.2. Encoding Details
 
@@ -134,9 +128,8 @@ Instead of using a type marker for each optional field within a `Group`, the imp
 
 -   `bit 0 (0x01)`: `AssetId` is present.
 -   `bit 1 (0x02)`: `ControlAsset` is present (genesis only).
--   `bit 2 (0x04)`: `Metadata` is present.
--   `bit 3 (0x08)`: `Immutable` is present (genesis only).
--   `bits 4-7`: Reserved for future protocol extensions. Parsers MUST ignore these bits if set.
+-   `bit 2 (0x04)`: `Metadata` is present (genesis only).
+-   `bits 3-7`: Reserved for future protocol extensions. Parsers MUST ignore these bits if set.
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
 
@@ -314,36 +307,24 @@ In summary, **Proof of Genesis** establishes historical origin, a one-time, stat
 
 Arkade Asset supports a flexible, onchain key-value model for metadata in the asset group. Well-known keys (e.g., `name`, `ticker`, `decimals`) can be defined in a separate standards document, but any key-value pair is valid.
 
-Metadata is managed directly within the `Group` packet structure:
+Metadata is defined at genesis and is **immutable**—it cannot be changed after the asset is created. This design eliminates race conditions in the 2-step async execution model and ensures metadata can be verified without indexer state injection.
 
-**1. Genesis Metadata**
+**Genesis Metadata**
 
-When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Metadata` map in the `Group` defines its initial, base metadata. This is useful for defining core, permanent properties.
+When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Metadata` map in the `Group` defines its permanent metadata. This is useful for defining core properties like names, images, or application-specific data.
 
-**2. Metadata Updates**
+**Metadata Hashing**
 
-To update the metadata for an existing asset, the asset MUST have a control asset, and the transaction packet must include specific groups:
+The `metadataHash` is the **Merkle root** of the asset's metadata, computed at genesis:
 
-- A `Group` for the asset being updated (e.g., asset B) must be present. This group may have no inputs or outputs, as the transaction is simply updating metadata.
-- A `Group` for the control asset (e.g., asset A) must be included. The control asset must be spent to authorize the update.
+- **Leaf Generation**: The leaves of the Merkle tree are the `sha256` hashes of the canonically encoded key-value pairs. The pairs MUST be sorted by key before hashing to ensure a deterministic root.
+- **Canonical Entry Format**: `leaf[i] = sha256(varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])`
 
-- **Rule**: If the `Metadata` field is present in a group for an *existing* asset, it is treated as an update. The transaction is only valid if one of its inputs spends the UTXO that currently holds the **Control Asset** for the asset being updated.
-- **Behavior**: An indexer will replace the asset's existing metadata with the new key-value pairs. This allows any entity with spending rights of the control asset to change or add metadata fields over time.
-- **Idempotency**: If the provided metadata is identical to the existing metadata, the transaction is still valid (assuming authorization), but no state change occurs. This allows clients to submit metadata without needing to check if it has changed.
+**Metadata Verification**
 
-> **Note:** To authorize a metadata update, the transaction must spend the UTXO containing the control asset. To avoid burning the control asset, the transaction packet must also include a group that transfers the control asset to a new output. If the control asset is not reissued, it is destroyed, and no further updates will be possible.
+Contracts verify metadata by recomputing the expected Merkle root from user-provided values. Since metadata is immutable, contracts can trust that the genesis metadata hash is the current and permanent hash.
 
-**3. Metadata Introspection**
-
-To enable trustless, onchain validation of asset properties without incurring high overhead, an indexer MUST make a hash of an asset's current metadata available to the script execution environment.
-
-- **Rule**: When building the transaction context for script execution, for each `Group` in the packet, the indexer must compute and expose a `metadataHash` for the corresponding asset. This hash is a read-only snapshot of the state *before* the current transaction is applied.
-- **Behavior**: A smart contract can then verify a specific piece of metadata by requiring the user to provide the full metadata as a function argument. The contract hashes the provided data and compares it against the `metadataHash` from the introspection API.
-
-- **Hashing Mechanism**: The `metadataHash` is the **Merkle root** of the asset's metadata. This provides a secure and efficient way to verify individual key-value pairs without processing the full metadata set onchain.
-  - **Leaf Generation**: The leaves of the Merkle tree are the `sha256` hashes of the canonically encoded key-value pairs. The pairs MUST be sorted by key before hashing to ensure a deterministic root.
-  - **Canonical Entry Format**: `leaf[i] = sha256(varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])`
-  - **Verification**: Contracts verify metadata by recomputing the expected Merkle root from user-provided values. Since Arkade Script does not include loop opcodes, contracts must know their metadata schema at compile time. For fixed schemas (e.g., 2-4 known keys), contracts can hardcode the leaf prefixes and tree structure, recomputing the root directly rather than verifying arbitrary Merkle proof paths. See the ArkadeKitties example, which uses a fixed 2-leaf tree for `genome` and `generation` fields.
+Since Arkade Script does not include loop opcodes, contracts must know their metadata schema at compile time. For fixed schemas (e.g., 2-4 known keys), contracts can hardcode the leaf prefixes and tree structure, recomputing the root directly. See the ArkadeKitties example, which uses a fixed 2-leaf tree for `genome` and `generation` fields.
 
 ---
 

@@ -25,7 +25,7 @@ All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
 
 | Opcode | Stack Effect | Description |
 |--------|--------------|-------------|
-| `OP_INSPECTASSETGROUPMETADATAHASH` `k source_u8` | → `hash32` | Metadata Merkle root. `source`: 0=input (existing), 1=output (new), 2=both |
+| `OP_INSPECTASSETGROUPMETADATAHASH` `k` | → `hash32` | Immutable metadata Merkle root (set at genesis) |
 
 ### Per-Group Inputs/Outputs
 
@@ -94,14 +94,10 @@ tx.assetGroups[k].isFresh  // → OP_INSPECTASSETGROUPASSETID k
 tx.assetGroups[k].control  // → OP_INSPECTASSETGROUPCTRL k
                            //   Returns: AssetId (txid32, gidx_u16), or -1 if no control
 
-// Metadata hashes
-tx.assetGroups[k].inputMetadataHash
-                           // → OP_INSPECTASSETGROUPMETADATAHASH k 0
-                           //   Metadata hash from inputs (existing state)
-
-tx.assetGroups[k].outputMetadataHash
-                           // → OP_INSPECTASSETGROUPMETADATAHASH k 1
-                           //   Metadata hash for outputs (new state)
+// Metadata hash (immutable, set at genesis)
+tx.assetGroups[k].metadataHash
+                           // → OP_INSPECTASSETGROUPMETADATAHASH k
+                           //   Returns the immutable metadata Merkle root
 
 // Counts
 tx.assetGroups[k].numInputs

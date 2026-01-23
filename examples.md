@@ -55,8 +55,7 @@ const payload: Packet = {
     // AssetId is omitted, which indicates this is a genesis (fresh asset).
     {
       controlAsset: { gidx: 0 }, // References Group[0]
-      metadata: { name: 'Token A' },
-      immutable: false,
+      metadata: { name: 'Token A' },  // Immutable metadata set at genesis
       inputs: [],
       outputs: [
         { type: 'LOCAL', o: 1, amt: 500n },
@@ -337,67 +336,7 @@ const payload: Packet = {
 
 ---
 
-## G) Metadata Update
-
-To update the metadata of an asset, the transaction must spend and re-create both the asset being updated and its corresponding control asset. The new metadata is included in the asset's group, and the indexer will verify that the control asset was present to authorize the change.
-
-### Transaction Diagram
-
-```mermaid
-flowchart LR
-  TX[(TX)]
-  i0["input 0<br/>• C: 1"] --> TX
-  i1["input 1<br/>• A: 1000"] --> TX
-  TX --> o0["output 0<br/>• C: 1"]
-  TX --> o1["output 1<br/>• A: 1000<br/>(new metadata)"]
-
-```
-
-### Asset Packet Definition
-
-- **Group[0] (Control Asset C):**
-  - `AssetId`: `(txidC, gidxC)`
-  - `Inputs`: `(i:0, amt:1)`
-  - `Outputs`: `(o:0, amt:1)`
-  - *Result: Control asset is present.*
-
-- **Group[1] (Updated Asset A):**
-  - `AssetId`: `(txidA, gidxA)`
-  - `Metadata`: `{...}` (contains the new metadata)
-  - `Inputs`: `(i:1, amt:1000)`
-  - `Outputs`: `(o:1, amt:1000)`
-  - *Result: Valid metadata update because control asset `C` is present.*
-
-### Code Example (TypeScript)
-
-```typescript
-import { Packet } from './arkade-assets-codec';
-
-const controlAssetId = { txidHex: 'cc'.repeat(32), gidx: 0 };
-const assetToUpdateId = { txidHex: 'aa'.repeat(32), gidx: 1 };
-
-const payload: Packet = {
-  groups: [
-    // Group 0: The control asset, spent and retained.
-    {
-      assetId: controlAssetId,
-      inputs: [{ type: 'LOCAL', i: 0, amt: 1n }],
-      outputs: [{ type: 'LOCAL', o: 0, amt: 1n }],
-    },
-    // Group 1: The asset having its metadata updated.
-    {
-      assetId: assetToUpdateId,
-      metadata: { name: 'New Token Name' }, // New metadata here
-      inputs: [{ type: 'LOCAL', i: 1, amt: 1000n }],
-      outputs: [{ type: 'LOCAL', o: 1, amt: 1000n }],
-    },
-  ]
-};
-```
-
----
-
-## H) Intent (Park & Claim)
+## G) Intent (Park & Claim)
 
 The intent system allows assets to be moved across Arkade batches. It's a two-stage process: park and claim.
 
