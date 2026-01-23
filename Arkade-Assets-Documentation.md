@@ -512,6 +512,11 @@ These rules ensure that:
 3. **No asset packet overhead**: Defense transactions remain lightweight and fast to broadcast
 
 ---
+
+
+<div style="page-break-after: always;"></div>
+
+
 # Arkade Script Opcodes
 
 This document outlines the introspection opcodes available in Arkade Script for interacting with Arkade Assets, along with the high-level API structure and example contracts.
@@ -805,6 +810,11 @@ let group = tx.assetGroups.find(assetId);
 require(group != null, "Asset not found");
 require(group.control == expectedControlId, "Wrong control asset");
 ```
+
+
+<div style="page-break-after: always;"></div>
+
+
 # Arkade Asset Transaction Examples
 
 ---
@@ -1463,6 +1473,11 @@ flowchart LR
   TX --> o0
   TX --> o1
 ```
+
+
+<div style="page-break-after: always;"></div>
+
+
 # ArkadeKitties: A Trustless Collectible Game on Ark
 
 This document outlines the design for ArkadeKitties, a decentralized game for collecting and breeding unique digital cats, built entirely on the Ark protocol using Arkade Assets and Arkade Script.
@@ -1794,3 +1809,8 @@ To ensure fair and unpredictable breeding, we introduce entropy using a **commit
 3.  **Reveal**: The user reveals their secret `salt` and combines it with the `oracleRand`. This combined, unpredictable value is used as entropy to generate the new Kitty's genome.
 
 This two-step process ensures that neither the user nor the oracle can unilaterally control the outcome, making the breeding process genuinely random.
+
+
+<div style="page-break-after: always;"></div>
+
+
