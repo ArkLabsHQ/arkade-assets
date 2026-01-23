@@ -397,80 +397,94 @@ const payload: Packet = {
 
 ---
 
-## H) Teleport (Lockup & Claim)
+## H) Intent (Park & Claim)
 
-The teleport system allows assets to be moved between batches without a direct UTXO dependency. It's a two-stage process: lockup and claim.
+The intent system allows assets to be moved across Arkade batches. It's a two-stage process: park and claim.
 
-1.  **Lockup Transaction:** An asset is spent into a `TELEPORT` output, which commits to a destination script (the receiver's scriptPubKey).
-2.  **Claim Transaction:** A second transaction claims the teleported asset by providing a `TELEPORT` input with a witness containing the `index`, `txid`, and the committed `Script`.
+1.  **Intent Transaction:** User parks assets in `INTENT` outputs, signaling participation in a batch swap.
+2.  **Commitment Transaction:** Operator claims parked assets via `INTENT` inputs and places them at new VTXOs via `LOCAL` outputs.
 
 ### Transaction Diagrams
 
-**Lockup Transaction**
+**Intent Transaction**
 ```mermaid
 flowchart LR
-  LockupTX[(Lockup TX)]
-  i0["input 0<br/>• T: 100"] --> LockupTX
-  LockupTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• script: receiver_pubkey"]
-
+  IntentTX[(Intent TX)]
+  i0["LOCAL input<br/>• T: 100<br/>from old VTXO"] --> IntentTX
+  IntentTX --> o_intent["INTENT output<br/>• T: 100<br/>• o: 0 (parked)"]
 ```
 
-**Claim Transaction**
+**Commitment Transaction**
 ```mermaid
 flowchart LR
-  ClaimTX[(Claim TX)]
-  i_teleport["Teleport Input<br/>• T: 100<br/>• witness: {index, txid, Script}"] --> ClaimTX
-  ClaimTX --> o0["output 0<br/>• T: 100<br/>• script: receiver_pubkey"]
-
+  CommitTX[(Commitment TX)]
+  i_intent["INTENT input<br/>• T: 100<br/>• txid: intent_txid<br/>• o: 0"] --> CommitTX
+  CommitTX --> o0["LOCAL output<br/>• T: 100<br/>• o: 0 (new VTXO)"]
 ```
 
 ### Asset Packet Definitions
 
-**Lockup Packet**
+**Intent Packet**
 - `AssetId`: `(txidT, gidxT)`
-- `Inputs`: `(i:0, amt:100)`
-- `Outputs`: `(type:TELEPORT, amt:100, script:receiver_script)`
+- `Inputs`: `(type:LOCAL, i:0, amt:100)`
+- `Outputs`: `(type:INTENT, o:0, amt:100)`
 
-**Claim Packet**
+**Commitment Packet**
 - `AssetId`: `(txidT, gidxT)`
-- `Inputs`: `(type:TELEPORT, amt:100, witness:{index:0, txid, Script})`
-- `Outputs`: `(o:0, amt:100)`
+- `Inputs`: `(type:INTENT, txid:intent_txid, o:0, amt:100)`
+- `Outputs`: `(type:LOCAL, o:0, amt:100)`
 
 ### Code Example (TypeScript)
 
 ```typescript
 import { Packet } from './arkade-assets-codec';
 
-const teleportAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
-const receiverScript = Buffer.from('76a914...88ac', 'hex'); // Example P2PKH script
-const txid = Buffer.alloc(32); // Will be the hash of the lockup transaction
+const assetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
+const intentTxid = Buffer.alloc(32); // Will be the hash of the intent transaction
 
-// Lockup Transaction Payload
-const lockupPayload: Packet = {
+// Intent Transaction Payload (user submits to join batch)
+const intentPayload: Packet = {
   groups: [
     {
-      assetId: teleportAssetId,
+      assetId: assetId,
       inputs: [{ type: 'LOCAL', i: 0, amt: 100n }],
-      outputs: [{ type: 'TELEPORT', script: receiverScript, amt: 100n }],
+      outputs: [{ type: 'INTENT', o: 0, amt: 100n }],
     },
   ]
 };
 
-// Claim Transaction Payload
-const claimPayload: Packet = {
+// Commitment Transaction Payload (operator builds batch)
+const commitmentPayload: Packet = {
   groups: [
     {
-      assetId: teleportAssetId,
+      assetId: assetId,
       inputs: [{
-        type: 'TELEPORT',
-        amt: 100n,
-        witness: {
-          index: 0,  // Index of the output in the lockup tx's asset group (the teleport output)
-          txid: txid,  // Hash of the lockup transaction
-          script: receiverScript       // The script committed in the teleport output
-        }
+        type: 'INTENT',
+        txid: intentTxid,  // Hash of the intent transaction
+        o: 0,              // Output index in intent tx
+        amt: 100n
       }],
       outputs: [{ type: 'LOCAL', o: 0, amt: 100n }],
+    },
+  ]
+};
+```
+
+### Composable Intents (Batch Swap + Collaborative Exit)
+
+A single intent can mix VTXOs and collaborative exits:
+
+```typescript
+// Intent with mixed destinations (specified via BIP322 config message)
+const mixedIntentPayload: Packet = {
+  groups: [
+    {
+      assetId: assetId,
+      inputs: [{ type: 'LOCAL', i: 0, amt: 100n }],
+      outputs: [
+        { type: 'INTENT', o: 0, amt: 30n },  // → new VTXO
+        { type: 'INTENT', o: 1, amt: 70n },  // → collaborative exit (on-chain)
+      ],
     },
   ]
 };

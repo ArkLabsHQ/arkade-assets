@@ -6,7 +6,7 @@
 
 The Arkade Asset protocol is designed to operate in a hybrid environment, with assets moving seamlessly between off-chain Arkade transactions and on-chain Bitcoin transactions. This architecture imposes a critical requirement: a unified view of the asset state.
 
--   The **Arkade Signer** (off-chain) must be aware of on-chain events. To validate transactions that might spend on-chain teleports or interact with on-chain assets, the Signer must have access to the state of the Bitcoin blockchain. It effectively acts as a private indexer for the user.
+-   The **Arkade Signer** (off-chain) must be aware of on-chain events. To validate transactions that interact with on-chain assets (e.g., after a unilateral exit), the Signer must have access to the state of the Bitcoin blockchain. It effectively acts as a private indexer for the user.
 -   An **On-chain Indexer** must be aware of Arkade-native transactions. To present a complete and accurate public ledger of assets, the indexer must be able to ingest and validate state transitions that occur within the Arkade system, by observing all relevant Arkade-native transactions.
 
 This ensures that an asset's history is unbroken and its ownership is unambiguous, regardless of how it is transferred.
@@ -145,8 +145,8 @@ The fields, if present, follow in that fixed order. This is more compact than a 
 For data structures that represent one of several variants (a `oneof` structure), a **type marker byte** is used. This is consistent with the logical TLV model.
 
 -   **`AssetRef`**: `0x01` for `BY_ID`, `0x02` for `BY_GROUP`.
--   **`AssetInput`**: `0x01` for `LOCAL`, `0x02` for `TELEPORT`.
--   **`AssetOutput`**: `0x01` for `LOCAL`, `0x02` for `TELEPORT`.
+-   **`AssetInput`**: `0x01` for `LOCAL`, `0x02` for `INTENT`.
+-   **`AssetOutput`**: `0x01` for `LOCAL`, `0x02` for `INTENT`.
 
 Type marker values are interpreted in the context of the structure being parsed; identical numeric values in different structures do not conflict.
 
@@ -163,21 +163,13 @@ AssetRef  := oneof {
 # later in the packet. Validators must use two-pass processing to resolve references.
 
 AssetInput := oneof {
-               0x01 LOCAL    { i: u32, amt: u64 }                    # input from same transaction's prevouts
-             | 0x02 TELEPORT { amt: u64, witness: TeleportWitness }  # input from teleport
+               0x01 LOCAL  { i: u32, amt: u64 }                  # input from same transaction's prevouts
+             | 0x02 INTENT { txid: bytes32, o: u32, amt: u64 }  # claim from intent output
              }
-# Note: For TELEPORT inputs, the witness identifies the lockup transaction and the
-# output within that transaction's asset group that created the teleport.
-
-TeleportWitness := {
-  txid : bytes32        # Hash of the lockup transaction that created the teleport output
-  index : u32           # Index of the teleport output in the lockup transaction's asset group
-  Script       : bytes          # The script that was committed to in the teleport output
-}
 
 AssetOutput := oneof {
-               0x01 LOCAL    { o: u32, amt: u64 }                    # output within same transaction
-             | 0x02 TELEPORT { script: bytes, amt: u64 }             # output to external transaction via script commitment
+               0x01 LOCAL  { o: u32, amt: u64 }   # output within same transaction
+             | 0x02 INTENT { o: u32, amt: u64 }   # parked for later claim by commitment tx
              }
 ```
 This hybrid approach balances compactness for the `Group` structure with the flexibility of type markers for variant data types.
@@ -194,64 +186,97 @@ This hybrid approach balances compactness for the `Group` structure with the fle
 
 ---
 
-## 5. Teleport System
+## 5. Intent System
 
-### Script-Based Teleports
+The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific virtual transactions that park assets for later claiming by a commitment transaction.
 
-Teleports use a **script commitment** to project assets to outputs in external transactions:
+### Intent Outputs
 
-1. **Creating a Teleport Output**:
-   - Creates `AssetOutput::TELEPORT { script, amt }` where:
-     - `script` is the receiver's scriptPubKey that the assets are committed to
-     - `amt` is the amount of assets being teleported
+An `AssetOutput::INTENT { o, amt }` parks assets at a specific output index of the intent transaction:
 
-2. **Claiming a Teleport Input**:
-   - Receiver creates a transaction with an output containing the committed `script`
-   - References the teleport via `AssetInput::TELEPORT { amt, witness }` where `witness` contains:
-     - `txid`: The hash of the lockup transaction that created the teleport output
-     - `index`: The index of the teleport output within the lockup transaction's asset group
-     - `Script`: The script that was committed to in the teleport output
-   - The teleported assets MUST be assigned, in aggregate amount, to one or more LOCAL outputs whose `scriptPubKey` equals the committed `script`. Indexers MUST verify the sum across those outputs >= claimed amount.
-   - Arkade Signer (offchain) / Indexer (onchain) validates:
-     - `txid` matches a known pending teleport lockup transaction
-     - `Script` matches the script committed in that teleport output
-     - Transaction contains at least one output with the exact `script`
-     - The assets flow matches the aggregate amount of outputs carrying the committed `script`
+- `o`: The output index (vout) in the same transaction
+- `amt`: The amount of assets being parked
 
-3. **Validation Rules**:
-   - Arkade Signer (offchain) / Indexer (onchain) tracks pending teleports via commitment hash.
-   - **Zero Amount Validation**: All asset amounts MUST be greater than zero. An input or output with `amount = 0` is INVALID.
-   - **Input Amount Validation**: Validators MUST verify that declared input amounts match the actual asset balances of referenced UTXOs. A packet claiming more tokens than a UTXO contains is INVALID.
-   - **Output Index Validation**: Output indices MUST reference valid transaction outputs. Out-of-bound indices render the transaction INVALID.
-   - **Lifecycle & Claiming Rules**:
-     - **Arkade-Native Teleport (source)**: No confirmation delay on the source. Claimable immediately by an arkade transaction (instant finality), or by an on-chain transaction (finality after 6 confirmations).
-     - **On-chain Teleport (source)**: Source must have `TELEPORT_MIN_CONFIRMATIONS = 6` block confirmations before claims are valid. This protects against reorg attacks.
-     - **Claim finality**: Arkade claims are instant. On-chain claims are final after 6 block confirmations.
-   - When a teleport input is claimed, the Signer/Indexer also verifies:
-     - The source transaction exists and has the corresponding teleport output.
-     - The claiming transaction has an output with the matching `payment_script`.
-     - **Assets from the teleport input MUST flow to a LOCAL output with the committed `payment_script`**.
-   - Unclaimed teleports remain pending until claimed.
-   - **Competing Claims**: In scenarios where multiple transactions attempt to claim the same teleport, the first valid claim to be processed wins. This implies:
-     - An arkade transaction will always win against a competing onchain transaction, as it is processed faster.
-     - If two arkade transactions compete for the same teleport, Arkade processes them in receipt order (first-received wins). The ordering is deterministic and final.
-     - If two onchain transactions compete, the one in the earlier mined block wins.
-     - If two onchain transactions compete and are mined in the same block, the one with the lowest index in the block wins.
+Assets parked in INTENT outputs are locked until the intent is included in a batch or dropped.
 
-### Teleport State Tracking
+### Intent Inputs
 
-The Signer/Indexer maintains:
+An `AssetInput::INTENT { txid, o, amt }` claims assets from a pending intent output:
+
+- `txid`: The intent transaction ID
+- `o`: The output index within that intent
+- `amt`: The amount being claimed (must match exactly)
+
+### Transaction Flow
+
 ```
-PendingTeleport := {
-  source_txid: bytes32,    // The transaction that created the teleport output (txid)
-  source_height: u64,      // Block height where the teleport was created. Optional for arkade-native teleports.
-  script: bytes,           // The committed script
-  assetid: AssetId,
-  amount: u64
+Old VTXO → [Intent TX] → Intent Outputs → [Commitment TX] → New VTXOs / On-chain
+           LOCAL inputs   INTENT outputs   INTENT inputs     LOCAL outputs
+```
+
+**Intent Transaction:**
+- LOCAL inputs spend assets from existing VTXO
+- INTENT outputs park assets at vouts in the same tx
+- Bitcoin outputs (vouts) specify the destinations
+- BIP322-signed message specifies which vouts are collaborative exits vs VTXOs
+- Standard delta rules apply
+
+**Commitment Transaction:**
+- INTENT inputs claim from pending intents
+- LOCAL outputs place assets at final destinations:
+  - **Collaborative exits**: Aggregated in the commitment tx's asset packet
+  - **VTXOs**: Each batch leaf holds its own asset packet for the VTXOs it creates
+
+### Composability
+
+A single intent can mix collaborative exits and VTXOs. The BIP322-signed configuration message embedded in the intent specifies the type of each output:
+
+```
+Intent TX:
+  vout 0 → collaborative exit (on-chain)
+  vout 1 → new VTXO
+  vout 2 → new VTXO
+
+Asset packet:
+  INTENT { o: 0, amt: 50 }   # 50 tokens to on-chain
+  INTENT { o: 1, amt: 30 }   # 30 tokens to VTXO
+  INTENT { o: 2, amt: 20 }   # 20 tokens to VTXO
+```
+
+### Validation Rules
+
+- **Zero Amount Validation**: All asset amounts MUST be greater than zero. An input or output with `amount = 0` is INVALID.
+- **Input Amount Validation**: Validators MUST verify that declared input amounts match the actual asset balances of referenced UTXOs.
+- **Output Index Validation**: Output indices MUST reference valid transaction outputs. Out-of-bound indices render the transaction INVALID.
+- **Intent Input Validation**: When processing an INTENT input `{ txid, o, amt }`:
+  1. Lookup pending intent by `txid`
+  2. Verify output at index `o` exists and is unclaimed
+  3. Verify `amt` matches the intent output's amount exactly
+  4. Mark intent output as claimed
+
+### Intent Lifecycle
+
+- **Submitted**: VTXOs and assets are locked
+- **Included in batch**: Assets transfer to new VTXOs or on-chain outputs
+- **Dropped**: Assets unlocked, free to use again
+
+User may revoke an intent, or operator may cancel it—in both cases assets are unlocked.
+
+No confirmation delays—intents are fully Arkade-native.
+
+### Intent State Tracking
+
+The Signer maintains:
+```
+PendingIntent := {
+  txid: bytes32,       # Intent transaction ID
+  o: u32,              # Output index
+  assetId: AssetId,    # The asset type
+  amt: u64             # Amount parked
 }
 ```
 
-When a teleport output is created, the indexer stores the source_txid, script, group index, and output index. When claiming, the indexer uses the `txid`, `index`, and `Script` from the witness to look up and validate the pending teleport.
+When an intent is submitted, the signer stores the intent details. When a commitment transaction claims intents, the signer validates each INTENT input against pending intents and marks them as claimed.
 
 ---
 
@@ -358,56 +383,30 @@ The indexer implementation described here operates on **confirmed blocks only**.
 
 ---
 
-## 8. Teleport Transfers
+## 8. Intent Transfers
 
-Teleport transfers enable assets to be projected to outputs in external transactions, solving asset continuity challenges across batches.
+Intent transfers enable assets to move between VTXOs across batches, and from VTXOs to on-chain outputs (collaborative exits).
 
-### Mechanism
-
-A teleport transfer is specified using the `TELEPORT` variant of `AssetOutput`:
+### Balance Conservation
 
 ```
-AssetOutput := oneof {
-  0x01 LOCAL    { o: u32, amt: u64 }                    # output within same transaction
-  0x02 TELEPORT { script: bytes, amt: u64 }             # output to external transaction via script commitment
-}
+sum(LOCAL inputs) + sum(INTENT inputs) + delta = sum(LOCAL outputs) + sum(INTENT outputs)
 ```
 
-When processing a transaction with teleport outputs:
-
-1. **Lockup Transaction**: Assets are deducted from inputs and committed to a destination script
-2. **Claim Transaction**: Must reference the lockup transaction and provide matching script
-3. **Asset Materialization**: Assets appear at the target outpoint once both transactions confirm
-
-### Validation Rules
-
-- **Balance Conservation**: `sum(LOCAL inputs) + sum(TELEPORT inputs) = sum(LOCAL outputs) + sum(TELEPORT outputs)`
-- **Teleport Acknowledgment**: Claim transaction MUST include `TELEPORT` input with matching `txid` and `Script`
-- **Exact Matching**: Teleport input witness must reference the correct lockup transaction and script
-- **Atomicity**: For on-chain sources, both source and target transactions MUST be confirmed (with N conf on the source as configured). For Arkade-native sources, claims MAY be processed immediately by Arkade.
-- **No Double-Spend**: Assets cannot be both transferred locally and teleported in the same group
+Where `delta` follows standard rules (mints require control asset; burns are permissionless).
 
 ### Asset Identity Preservation
 
-Teleported assets maintain their original `(genesis_txid, group_index)` identity. This ensures:
+Assets transferred via intents maintain their original `(genesis_txid, group_index)` identity. This ensures:
 - Asset transfers remain traceable to their genesis
 - Control asset relationships are preserved
-- Metadata history is maintained across teleports
-
-### Indexer Behavior
-
-The indexer handles teleports through a two-phase validation process:
-
-1. **Source Validation**: When source transaction confirms, verify `TELEPORT` outputs are well-formed
-2. **Target Validation**: When target transaction confirms, verify it includes matching `TELEPORT` inputs
-3. **Asset Transfer**: Only credit assets to target UTXO after both transactions confirm and match
-4. **Burn Policy**: If target transaction confirms but doesn't include matching `TELEPORT` input, assets are permanently burned
+- Metadata history is maintained across intent transfers
 
 ---
 
 ## 9. Arkade Batch Swap Support
 
-Teleport transfers provide native support for Arkade's batch swap mechanism, enabling seamless asset continuity across VTXO transitions from the virtual mempool to a new batch.
+The intent system provides native support for Arkade's batch swap mechanism, enabling seamless asset continuity across VTXO transitions.
 
 ### The Batch Swap Challenge
 
@@ -416,46 +415,43 @@ In Arkade, users periodically perform batch swaps to:
 - Reset VTXO expiry times
 - Maintain unilateral exit guarantees
 
-Without teleports, assets in old VTXOs would be lost during batch swaps, requiring complex workarounds or operator liquidity fronting.
+Without intents, assets in old VTXOs would be lost during batch swaps, requiring complex workarounds or operator liquidity fronting.
 
-### Teleport-Enabled Batch Swaps
+### Intent-Based Batch Swaps
 
-With teleport transfers, the batch swap process becomes:
+With intent transfers, the batch swap process becomes:
 
-1. **User's Forfeit Transaction**:
-   - Spends old VTXO containing assets
-   - Uses `TELEPORT` outputs to send assets to new batch commitment transaction
-   - No assets are burned or lost
+1. **User Submits Intent**:
+   - LOCAL inputs spend from old VTXO containing assets
+   - INTENT outputs park assets for the new batch
+   - BIP322-signed message specifies VTXO vs collaborative exit destinations
 
-2. **Operator's Commitment Transaction**:
-   - Creates new VTXOs for users
-   - Receives teleported assets at specified outputs
-   - Assets materialize in the new batch structure
+2. **Operator Builds Commitment Transaction**:
+   - INTENT inputs claim from all pending intents
+   - LOCAL outputs place assets at final destinations:
+     - **Collaborative exits**: Aggregated in commitment tx's asset packet
+     - **VTXOs**: Each batch leaf holds its own asset packet
 
 ### Example Flow
 
 ```mermaid
 graph LR
-    A[Old VTXO<br/>• LOL: 100] --> B[Forfeit TX]
-    B --> C[Teleport Transfer<br/>LOL: 100 → new_batch:0]
+    A[Old VTXO<br/>• LOL: 100] --> B[Intent TX]
+    B --> C[INTENT Output<br/>LOL: 100 parked]
     D[Commitment TX] --> E[New VTXO<br/>• LOL: 100]
-    C -.-> E
+    C -.-> D
 ```
 
 ### Benefits
 
 - **Asset Continuity**: Assets maintain their identity across batch swaps
 - **No Liquidity Requirements**: Operator doesn't need to front assets
-- **Atomic Operations**: Both forfeit and commitment transactions must confirm
-- **TEE Validation**: Arkade's TEE cosigner validates teleport destinations before signing
+- **Composability**: Single intent can mix VTXOs and collaborative exits
+- **Simplicity**: No script commitments or witnesses—direct txid+output references
 
-### Implementation Notes
+### Collaborative Exit
 
-In the Arkade context:
-- The TEE cosigner validates that teleport targets point to valid new VTXOs
-- Batch swap intents include teleport specifications
-- Asset balances are preserved across the VTXO transition
-- No additional operator infrastructure is required
+Users can exit assets to on-chain outputs by specifying collaborative exit in their intent's BIP322 configuration. The commitment transaction's asset packet aggregates all collaborative exit claims and places those assets at on-chain outputs via LOCAL outputs.
 
 This mechanism ensures that Arkade Assets work seamlessly within Arkade's batch swap architecture while maintaining the protocol's trust-minimized properties.
 
@@ -516,7 +512,6 @@ These rules ensure that:
 3. **No asset packet overhead**: Defense transactions remain lightweight and fast to broadcast
 
 ---
-
 # Arkade Script Opcodes
 
 This document outlines the introspection opcodes available in Arkade Script for interacting with Arkade Assets, along with the high-level API structure and example contracts.
@@ -559,11 +554,9 @@ All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
 | Type | `type_u8` | Additional Data |
 |------|-----------|-----------------|
 | LOCAL input | `0x01` | `input_index_u32 amount_u64` |
-| TELEPORT input | `0x02` | `witness_index_u32 amount_u64 intent_tx_hash_32 script` |
+| INTENT input | `0x02` | `txid_32 output_index_u32 amount_u64` |
 | LOCAL output | `0x01` | `output_index_u32 amount_u64` |
-| TELEPORT output | `0x02` | `script amount_u64` |
-
-**Note:** TELEPORT inputs include the witness (index, txid, Script) for validation; the witness.index identifies the teleport output inside the lockup transaction's asset group. TELEPORT outputs return the committed script.
+| INTENT output | `0x02` | `output_index_u32 amount_u64` |
 
 ### Cross-Output (Multi-Asset per UTXO)
 
@@ -581,16 +574,14 @@ All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
 | `OP_INSPECTINASSETAT` `i t` | → `txid32 gidx_u16 amount_u64` | t-th asset declared for input `i` |
 | `OP_INSPECTINASSETLOOKUP` `i txid32 gidx_u16` | → `amount_u64` \| `-1` | Declared amount for asset at input `i`, or -1 if not found |
 
-### Teleport-Specific
+### Intent-Specific
 
 | Opcode | Stack Effect | Description |
 |--------|--------------|-------------|
-| `OP_INSPECTGROUPTELEPORTOUTCOUNT` `k` | → `n` | Number of TELEPORT outputs in group `k` |
-| `OP_INSPECTGROUPTELEPORTOUT` `k j` | → `script amount_u64` | j-th TELEPORT output in group `k` |
-| `OP_INSPECTGROUPTELEPORTINCOUNT` `k` | → `n` | Number of TELEPORT inputs in group `k` |
-| `OP_INSPECTGROUPTELEPORTIN` `k j` | → `witness_index_u32 amount_u64 intent_tx_hash_32 script` | j-th TELEPORT input in group `k` |
-
-**Note:** TELEPORT inputs return the witness (index, txid, Script); the witness.index identifies which output in the lockup transaction's asset group created the teleport.
+| `OP_INSPECTGROUPINTENTOUTCOUNT` `k` | → `n` | Number of INTENT outputs in group `k` |
+| `OP_INSPECTGROUPINTENTOUT` `k j` | → `output_index_u32 amount_u64` | j-th INTENT output in group `k` |
+| `OP_INSPECTGROUPINTENTINCOUNT` `k` | → `n` | Number of INTENT inputs in group `k` |
+| `OP_INSPECTGROUPINTENTIN` `k j` | → `txid_32 output_index_u32 amount_u64` | j-th INTENT input in group `k` |
 
 ---
 
@@ -658,30 +649,29 @@ tx.assetGroups[k].outputs[j]
 
 ```javascript
 // AssetInput (from OP_INSPECTASSETGROUP k j 0)
-tx.assetGroups[k].inputs[j].type       // LOCAL (0x01) or TELEPORT (0x02)
+tx.assetGroups[k].inputs[j].type       // LOCAL (0x01) or INTENT (0x02)
 tx.assetGroups[k].inputs[j].amount     // Asset amount (u64)
 
 // LOCAL input additional fields:
-tx.assetGroups[k].inputs[j].inputIndex // Transaction input index (u16)
+tx.assetGroups[k].inputs[j].inputIndex // Transaction input index (u32)
 
-// TELEPORT input additional fields:
-tx.assetGroups[k].inputs[j].witness.index   // Index of the output in the lockup tx's asset group (u32)
-tx.assetGroups[k].inputs[j].witness.txid    // Hash of the lockup transaction (bytes32)
-tx.assetGroups[k].inputs[j].witness.script   // The committed script (bytes)
+// INTENT input additional fields:
+tx.assetGroups[k].inputs[j].txid       // Intent transaction ID (bytes32)
+tx.assetGroups[k].inputs[j].outputIndex // Output index in intent tx (u32)
 
 // AssetOutput (from OP_INSPECTASSETGROUP k j 1)
-tx.assetGroups[k].outputs[j].type       // LOCAL (0x01) or TELEPORT (0x02)
+tx.assetGroups[k].outputs[j].type       // LOCAL (0x01) or INTENT (0x02)
 tx.assetGroups[k].outputs[j].amount     // Asset amount (u64)
 
 // LOCAL output additional fields:
-tx.assetGroups[k].outputs[j].outputIndex // Transaction output index (u16)
+tx.assetGroups[k].outputs[j].outputIndex // Transaction output index (u32)
 tx.assetGroups[k].outputs[j].scriptPubKey
                            // → OP_INSPECTASSETGROUP k j 1
                            //   (extract output index)
                            //   OP_INSPECTOUTPUTSCRIPTPUBKEY
 
-// TELEPORT output additional fields:
-tx.assetGroups[k].outputs[j].script    // The committed script (bytes)
+// INTENT output additional fields:
+tx.assetGroups[k].outputs[j].outputIndex // Output index in same tx (u32)
 ```
 
 ### Cross-Input Asset Lookups
@@ -733,7 +723,7 @@ struct AssetRef {
 }
 
 // Input types
-enum AssetInputType { LOCAL = 0x01, TELEPORT = 0x02 }
+enum AssetInputType { LOCAL = 0x01, INTENT = 0x02 }
 
 struct AssetInputLocal {
     type: AssetInputType,    // LOCAL
@@ -741,20 +731,15 @@ struct AssetInputLocal {
     amount: bigint
 }
 
-struct TeleportWitness {
-    txid: bytes32,
-    index: int,
-    script: bytes
-}
-
-struct AssetInputTeleport {
-    type: AssetInputType,    // TELEPORT
+struct AssetInputIntent {
+    type: AssetInputType,    // INTENT
+    txid: bytes32,           // Intent transaction ID
+    outputIndex: int,        // Output index in intent tx
     amount: bigint
-    witness: TeleportWitness
 }
 
 // Output types
-enum AssetOutputType { LOCAL = 0x01, TELEPORT = 0x02 }
+enum AssetOutputType { LOCAL = 0x01, INTENT = 0x02 }
 
 struct AssetOutputLocal {
     type: AssetOutputType,   // LOCAL
@@ -762,9 +747,9 @@ struct AssetOutputLocal {
     amount: bigint
 }
 
-struct AssetOutputTeleport {
-    type: AssetOutputType,   // TELEPORT
-    script: bytes,           // The committed script (receiver's scriptPubKey)
+struct AssetOutputIntent {
+    type: AssetOutputType,   // INTENT
+    outputIndex: int,        // Output index in same tx (parked for claim)
     amount: bigint
 }
 
@@ -773,25 +758,6 @@ struct AssetOutputTeleport {
 ---
 
 ## Common Patterns
-
-### Verifying Teleport Input
-
-To verify a teleport input references a valid pending teleport:
-
-```javascript
-// The teleport input provides:
-// - txid: the source transaction that created the teleport
-// - script: the script that was committed to
-
-// The indexer/signer validates:
-// 1. txid matches a known pending teleport
-// 2. script matches the script in that teleport output
-// 3. The claiming transaction has an output with matching script
-
-let teleportIn = tx.assetGroups[k].inputs[j];
-require(teleportIn.type == TELEPORT);
-// txid and script are validated by the indexer against pending teleports
-```
 
 ### Checking Asset Presence
 
@@ -1238,80 +1204,94 @@ const payload: Packet = {
 
 ---
 
-## H) Teleport (Lockup & Claim)
+## H) Intent (Park & Claim)
 
-The teleport system allows assets to be moved between transactions without a direct UTXO dependency. It's a two-stage process: lockup and claim.
+The intent system allows assets to be moved across Arkade batches. It's a two-stage process: park and claim.
 
-1.  **Lockup Transaction:** An asset is spent into a `TELEPORT` output, which commits to a destination script (the receiver's scriptPubKey).
-2.  **Claim Transaction:** A second transaction claims the teleported asset by providing a `TELEPORT` input with a witness containing the `index`, `txid`, and the committed `Script`.
+1.  **Intent Transaction:** User parks assets in `INTENT` outputs, signaling participation in a batch swap.
+2.  **Commitment Transaction:** Operator claims parked assets via `INTENT` inputs and places them at new VTXOs via `LOCAL` outputs.
 
 ### Transaction Diagrams
 
-**Lockup Transaction**
+**Intent Transaction**
 ```mermaid
 flowchart LR
-  LockupTX[(Lockup TX)]
-  i0["input 0<br/>• T: 100"] --> LockupTX
-  LockupTX --> o_teleport["Teleport Output<br/>• T: 100<br/>• script: receiver_pubkey"]
-
+  IntentTX[(Intent TX)]
+  i0["LOCAL input<br/>• T: 100<br/>from old VTXO"] --> IntentTX
+  IntentTX --> o_intent["INTENT output<br/>• T: 100<br/>• o: 0 (parked)"]
 ```
 
-**Claim Transaction**
+**Commitment Transaction**
 ```mermaid
 flowchart LR
-  ClaimTX[(Claim TX)]
-  i_teleport["Teleport Input<br/>• T: 100<br/>• witness: {index, txid, Script}"] --> ClaimTX
-  ClaimTX --> o0["output 0<br/>• T: 100<br/>• script: receiver_pubkey"]
-
+  CommitTX[(Commitment TX)]
+  i_intent["INTENT input<br/>• T: 100<br/>• txid: intent_txid<br/>• o: 0"] --> CommitTX
+  CommitTX --> o0["LOCAL output<br/>• T: 100<br/>• o: 0 (new VTXO)"]
 ```
 
 ### Asset Packet Definitions
 
-**Lockup Packet**
+**Intent Packet**
 - `AssetId`: `(txidT, gidxT)`
-- `Inputs`: `(i:0, amt:100)`
-- `Outputs`: `(type:TELEPORT, amt:100, script:receiver_script)`
+- `Inputs`: `(type:LOCAL, i:0, amt:100)`
+- `Outputs`: `(type:INTENT, o:0, amt:100)`
 
-**Claim Packet**
+**Commitment Packet**
 - `AssetId`: `(txidT, gidxT)`
-- `Inputs`: `(type:TELEPORT, amt:100, witness:{index:0, txid, Script})`
-- `Outputs`: `(o:0, amt:100)`
+- `Inputs`: `(type:INTENT, txid:intent_txid, o:0, amt:100)`
+- `Outputs`: `(type:LOCAL, o:0, amt:100)`
 
 ### Code Example (TypeScript)
 
 ```typescript
 import { Packet } from './arkade-assets-codec';
 
-const teleportAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
-const receiverScript = Buffer.from('76a914...88ac', 'hex'); // Example P2PKH script
-const txid = Buffer.alloc(32); // Will be the hash of the lockup transaction
+const assetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
+const intentTxid = Buffer.alloc(32); // Will be the hash of the intent transaction
 
-// Lockup Transaction Payload
-const lockupPayload: Packet = {
+// Intent Transaction Payload (user submits to join batch)
+const intentPayload: Packet = {
   groups: [
     {
-      assetId: teleportAssetId,
+      assetId: assetId,
       inputs: [{ type: 'LOCAL', i: 0, amt: 100n }],
-      outputs: [{ type: 'TELEPORT', script: receiverScript, amt: 100n }],
+      outputs: [{ type: 'INTENT', o: 0, amt: 100n }],
     },
   ]
 };
 
-// Claim Transaction Payload
-const claimPayload: Packet = {
+// Commitment Transaction Payload (operator builds batch)
+const commitmentPayload: Packet = {
   groups: [
     {
-      assetId: teleportAssetId,
+      assetId: assetId,
       inputs: [{
-        type: 'TELEPORT',
-        amt: 100n,
-        witness: {
-          index: 0,  // Index of the output in the lockup tx's asset group (the teleport output)
-          txid: txid,  // Hash of the lockup transaction
-          script: receiverScript       // The script committed in the teleport output
-        }
+        type: 'INTENT',
+        txid: intentTxid,  // Hash of the intent transaction
+        o: 0,              // Output index in intent tx
+        amt: 100n
       }],
       outputs: [{ type: 'LOCAL', o: 0, amt: 100n }],
+    },
+  ]
+};
+```
+
+### Composable Intents (Batch Swap + Collaborative Exit)
+
+A single intent can mix VTXOs and collaborative exits:
+
+```typescript
+// Intent with mixed destinations (specified via BIP322 config message)
+const mixedIntentPayload: Packet = {
+  groups: [
+    {
+      assetId: assetId,
+      inputs: [{ type: 'LOCAL', i: 0, amt: 100n }],
+      outputs: [
+        { type: 'INTENT', o: 0, amt: 30n },  // → new VTXO
+        { type: 'INTENT', o: 1, amt: 70n },  // → collaborative exit (on-chain)
+      ],
     },
   ]
 };
