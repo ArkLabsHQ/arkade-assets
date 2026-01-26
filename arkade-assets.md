@@ -47,7 +47,22 @@ Arkade Asset V1 supports projecting multiple assets onto a single UTXO, and BTC 
 
 Asset amounts are atomic units, and supply management is managed through UTXO spending conditions.
 
----
+### Asset Metadata
+
+Arkade Asset supports a flexible, onchain key-value model for metadata in the asset group. Well-known keys (e.g., `name`, `ticker`, `decimals`) can be defined in a separate standards document, but any key-value pair is valid.
+
+Metadata is defined at genesis and is **immutable**—it cannot be changed after the asset is created. This design eliminates race conditions in the 2-step async execution model and ensures metadata can be verified without indexer state injection.
+
+**Genesis Metadata**
+
+When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Metadata` map in the `Group` defines its permanent metadata. This is useful for defining core properties like names, images, or application-specific data.
+
+**Metadata Hashing**
+
+The `metadataHash` is the **Merkle root** of the asset's metadata, computed at genesis:
+
+- **Leaf Generation**: The leaves of the Merkle tree are the `sha256` hashes of the canonically encoded key-value pairs. The pairs MUST be sorted by key before hashing to ensure a deterministic root.
+- **Canonical Entry Format**: `leaf[i] = sha256(varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])`
 
 ## 2. OP\_RETURN structure
 
@@ -242,32 +257,6 @@ This method proves who has administrative rights over an asset (e.g., the abilit
 
 In summary, **Proof of Genesis** establishes historical origin, a one-time, static origin of an asset, **Proof of Control** provides an ongoing mechanism to demonstrate administrative authority - supporting actions such as reissuance or periodic attestations of authenticity - by linking the asset to a live, controlled UTXO on the Bitcoin blockchain. 
 
----
-
-### Asset Metadata
-
-Arkade Asset supports a flexible, onchain key-value model for metadata in the asset group. Well-known keys (e.g., `name`, `ticker`, `decimals`) can be defined in a separate standards document, but any key-value pair is valid.
-
-Metadata is defined at genesis and is **immutable**—it cannot be changed after the asset is created. This design eliminates race conditions in the 2-step async execution model and ensures metadata can be verified without indexer state injection.
-
-**Genesis Metadata**
-
-When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Metadata` map in the `Group` defines its permanent metadata. This is useful for defining core properties like names, images, or application-specific data.
-
-**Metadata Hashing**
-
-The `metadataHash` is the **Merkle root** of the asset's metadata, computed at genesis:
-
-- **Leaf Generation**: The leaves of the Merkle tree are the `sha256` hashes of the canonically encoded key-value pairs. The pairs MUST be sorted by key before hashing to ensure a deterministic root.
-- **Canonical Entry Format**: `leaf[i] = sha256(varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])`
-
-**Metadata Verification**
-
-Contracts verify metadata by recomputing the expected Merkle root from user-provided values. Since metadata is immutable, contracts can trust that the genesis metadata hash is the current and permanent hash.
-
-Since Arkade Script does not include loop opcodes, contracts must know their metadata schema at compile time. For fixed schemas (e.g., 2-4 known keys), contracts can hardcode the leaf prefixes and tree structure, recomputing the root directly. See the ArkadeKitties example, which uses a fixed 2-leaf tree for `genome` and `generation` fields.
-
----
 
 ## 7. Indexer State and Reorganization Handling
 
