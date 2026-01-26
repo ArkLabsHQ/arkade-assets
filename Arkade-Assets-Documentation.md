@@ -6,7 +6,7 @@
 
 The Arkade Asset protocol is designed to operate in a hybrid environment, with assets moving seamlessly between off-chain Arkade transactions and on-chain Bitcoin transactions. This architecture imposes a critical requirement: a unified view of the asset state.
 
--   The **Arkade Signer** (off-chain) must be aware of on-chain events. To validate transactions that interact with on-chain assets (e.g., after a unilateral exit or collaborative-exit), the Signer must have access to the state of the Bitcoin blockchain. It effectively acts as a private indexer for the user.
+-   The **Arkade Signer** (off-chain) must be aware of on-chain events. To validate transactions that interact with on-chain assets (e.g., after a unilateral exit or collaborative-exit ), the Signer must have access to the state of the Bitcoin blockchain. It effectively acts as a private indexer for the user.
 -   An **On-chain Indexer** must be aware of Arkade-native transactions. To present a complete and accurate public ledger of assets, the indexer must be able to ingest and validate state transitions that occur within the Arkade system, by observing all relevant Arkade-native transactions.
 
 This ensures that an asset's history is unbroken and its ownership is unambiguous, regardless of how it is transferred.
