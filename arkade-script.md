@@ -25,7 +25,7 @@ All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
 
 | Opcode | Stack Effect | Description |
 |--------|--------------|-------------|
-| `OP_INSPECTASSETGROUPMETADATAHASH` `k source_u8` | → `hash32` | Metadata Merkle root. `source`: 0=input (existing), 1=output (new), 2=both |
+| `OP_INSPECTASSETGROUPMETADATAHASH` `k` | → `hash32` | Immutable metadata Merkle root (set at genesis) |
 
 ### Per-Group Inputs/Outputs
 
@@ -39,12 +39,10 @@ All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
 
 | Type | `type_u8` | Additional Data |
 |------|-----------|-----------------|
-| LOCAL input | `0x01` | `input_index_u16 amount_u64` |
-| TELEPORT input | `0x02` | `payment_script nonce amount_u64` |
-| LOCAL output | `0x01` | `output_index_u16 amount_u64` |
-| TELEPORT output | `0x02` | `commitment_32 amount_u64` |
-
-**Note:** TELEPORT inputs return the full witness (payment_script, nonce) since the packet contains the preimage. TELEPORT outputs only return the commitment since the witness is not yet revealed.
+| LOCAL input | `0x01` | `input_index_u32 amount_u64` |
+| INTENT input | `0x02` | `txid_32 output_index_u32 amount_u64` |
+| LOCAL output | `0x01` | `output_index_u32 amount_u64` |
+| INTENT output | `0x02` | `output_index_u32 amount_u64` |
 
 ### Cross-Output (Multi-Asset per UTXO)
 
@@ -62,16 +60,14 @@ All Asset IDs are represented as **two stack items**: `(txid32, gidx_u16)`.
 | `OP_INSPECTINASSETAT` `i t` | → `txid32 gidx_u16 amount_u64` | t-th asset declared for input `i` |
 | `OP_INSPECTINASSETLOOKUP` `i txid32 gidx_u16` | → `amount_u64` \| `-1` | Declared amount for asset at input `i`, or -1 if not found |
 
-### Teleport-Specific
+### Intent-Specific
 
 | Opcode | Stack Effect | Description |
 |--------|--------------|-------------|
-| `OP_INSPECTGROUPTELEPORTOUTCOUNT` `k` | → `n` | Number of TELEPORT outputs in group `k` |
-| `OP_INSPECTGROUPTELEPORTOUT` `k j` | → `commitment_32 amount_u64` | j-th TELEPORT output in group `k` |
-| `OP_INSPECTGROUPTELEPORTINCOUNT` `k` | → `n` | Number of TELEPORT inputs in group `k` |
-| `OP_INSPECTGROUPTELEPORTIN` `k j` | → `payment_script nonce amount_u64` | j-th TELEPORT input witness in group `k` |
-
-**Note:** TELEPORT inputs return the full witness (payment_script, nonce) since the packet contains the preimage. The commitment can be computed as `sha256(payment_script || nonce)`.
+| `OP_INSPECTGROUPINTENTOUTCOUNT` `k` | → `n` | Number of INTENT outputs in group `k` |
+| `OP_INSPECTGROUPINTENTOUT` `k j` | → `output_index_u32 amount_u64` | j-th INTENT output in group `k` |
+| `OP_INSPECTGROUPINTENTINCOUNT` `k` | → `n` | Number of INTENT inputs in group `k` |
+| `OP_INSPECTGROUPINTENTIN` `k j` | → `txid_32 output_index_u32 amount_u64` | j-th INTENT input in group `k` |
 
 ---
 
@@ -98,14 +94,10 @@ tx.assetGroups[k].isFresh  // → OP_INSPECTASSETGROUPASSETID k
 tx.assetGroups[k].control  // → OP_INSPECTASSETGROUPCTRL k
                            //   Returns: AssetId (txid32, gidx_u16), or -1 if no control
 
-// Metadata hashes
-tx.assetGroups[k].inputMetadataHash
-                           // → OP_INSPECTASSETGROUPMETADATAHASH k 0
-                           //   Metadata hash from inputs (existing state)
-
-tx.assetGroups[k].outputMetadataHash
-                           // → OP_INSPECTASSETGROUPMETADATAHASH k 1
-                           //   Metadata hash for outputs (new state)
+// Metadata hash (immutable, set at genesis)
+tx.assetGroups[k].metadataHash
+                           // → OP_INSPECTASSETGROUPMETADATAHASH k
+                           //   Returns the immutable metadata Merkle root
 
 // Counts
 tx.assetGroups[k].numInputs
@@ -139,30 +131,29 @@ tx.assetGroups[k].outputs[j]
 
 ```javascript
 // AssetInput (from OP_INSPECTASSETGROUP k j 0)
-tx.assetGroups[k].inputs[j].type       // LOCAL (0x01) or TELEPORT (0x02)
+tx.assetGroups[k].inputs[j].type       // LOCAL (0x01) or INTENT (0x02)
 tx.assetGroups[k].inputs[j].amount     // Asset amount (u64)
 
 // LOCAL input additional fields:
-tx.assetGroups[k].inputs[j].inputIndex // Transaction input index (u16)
+tx.assetGroups[k].inputs[j].inputIndex // Transaction input index (u32)
 
-// TELEPORT input additional fields:
-tx.assetGroups[k].inputs[j].paymentScript // Payment script (bytes)
-tx.assetGroups[k].inputs[j].nonce      // Teleport nonce (bytes32)
-tx.assetGroups[k].inputs[j].commitment // → sha256(paymentScript || nonce)
+// INTENT input additional fields:
+tx.assetGroups[k].inputs[j].txid       // Intent transaction ID (bytes32)
+tx.assetGroups[k].inputs[j].outputIndex // Output index in intent tx (u32)
 
 // AssetOutput (from OP_INSPECTASSETGROUP k j 1)
-tx.assetGroups[k].outputs[j].type       // LOCAL (0x01) or TELEPORT (0x02)
+tx.assetGroups[k].outputs[j].type       // LOCAL (0x01) or INTENT (0x02)
 tx.assetGroups[k].outputs[j].amount     // Asset amount (u64)
 
 // LOCAL output additional fields:
-tx.assetGroups[k].outputs[j].outputIndex // Transaction output index (u16)
+tx.assetGroups[k].outputs[j].outputIndex // Transaction output index (u32)
 tx.assetGroups[k].outputs[j].scriptPubKey
                            // → OP_INSPECTASSETGROUP k j 1
                            //   (extract output index)
                            //   OP_INSPECTOUTPUTSCRIPTPUBKEY
 
-// TELEPORT output additional fields:
-tx.assetGroups[k].outputs[j].commitment // Teleport commitment (bytes32)
+// INTENT output additional fields:
+tx.assetGroups[k].outputs[j].outputIndex // Output index in same tx (u32)
 ```
 
 ### Cross-Input Asset Lookups
@@ -214,7 +205,7 @@ struct AssetRef {
 }
 
 // Input types
-enum AssetInputType { LOCAL = 0x01, TELEPORT = 0x02 }
+enum AssetInputType { LOCAL = 0x01, INTENT = 0x02 }
 
 struct AssetInputLocal {
     type: AssetInputType,    // LOCAL
@@ -222,16 +213,15 @@ struct AssetInputLocal {
     amount: bigint
 }
 
-struct AssetInputTeleport {
-    type: AssetInputType,    // TELEPORT
-    paymentScript: bytes,    // Variable-length payment script (from witness)
-    nonce: bytes32,          // 32-byte random nonce (from witness)
+struct AssetInputIntent {
+    type: AssetInputType,    // INTENT
+    txid: bytes32,           // Intent transaction ID
+    outputIndex: int,        // Output index in intent tx
     amount: bigint
-    // commitment = sha256(paymentScript || nonce)
 }
 
 // Output types
-enum AssetOutputType { LOCAL = 0x01, TELEPORT = 0x02 }
+enum AssetOutputType { LOCAL = 0x01, INTENT = 0x02 }
 
 struct AssetOutputLocal {
     type: AssetOutputType,   // LOCAL
@@ -239,9 +229,9 @@ struct AssetOutputLocal {
     amount: bigint
 }
 
-struct AssetOutputTeleport {
-    type: AssetOutputType,   // TELEPORT
-    commitment: bytes32,     // sha256(payment_script || nonce)
+struct AssetOutputIntent {
+    type: AssetOutputType,   // INTENT
+    outputIndex: int,        // Output index in same tx (locked for claim)
     amount: bigint
 }
 
@@ -250,22 +240,6 @@ struct AssetOutputTeleport {
 ---
 
 ## Common Patterns
-
-### Verifying Teleport Commitment
-
-The teleport commitment is `sha256(payment_script || nonce)`. To verify:
-
-```javascript
-// Using streaming SHA256 (efficient for variable-length data)
-let state = OP_SHA256INITIALIZE;
-state = OP_SHA256UPDATE(state, paymentScript);
-state = OP_SHA256UPDATE(state, nonce);
-let computedCommitment = OP_SHA256FINALIZE(state);
-require(computedCommitment == expectedCommitment);
-
-// Or simply:
-require(sha256(paymentScript + nonce) == expectedCommitment);
-```
 
 ### Checking Asset Presence
 
