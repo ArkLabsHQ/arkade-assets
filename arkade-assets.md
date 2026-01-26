@@ -316,7 +316,7 @@ With intent transfers, the batch swap process becomes:
 
 1. **User Submits Intent**:
    - LOCAL inputs spend from old VTXO containing assets
-   - INTENT outputs park assets for the new batch
+   - INTENT outputs lock assets for the new batch
    - BIP322-signed message specifies VTXO vs collaborative exit destinations
 
 2. **Operator Builds Commitment Transaction**:
@@ -330,7 +330,7 @@ With intent transfers, the batch swap process becomes:
 ```mermaid
 graph LR
     A[Old VTXO<br/>• LOL: 100] --> B[Intent TX]
-    B --> C[INTENT Output<br/>LOL: 100 parked]
+    B --> C[INTENT Output<br/>LOL: 100 locked]
     D[Commitment TX] --> E[New VTXO<br/>• LOL: 100]
     C -.-> D
 ```

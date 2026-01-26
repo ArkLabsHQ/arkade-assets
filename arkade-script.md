@@ -231,7 +231,7 @@ struct AssetOutputLocal {
 
 struct AssetOutputIntent {
     type: AssetOutputType,   // INTENT
-    outputIndex: int,        // Output index in same tx (parked for claim)
+    outputIndex: int,        // Output index in same tx (locked for claim)
     amount: bigint
 }
 

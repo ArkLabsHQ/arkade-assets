@@ -336,12 +336,12 @@ const payload: Packet = {
 
 ---
 
-## G) Intent (Park & Claim)
+## G) Intent (Lock & Claim)
 
-The intent system allows assets to be moved across Arkade batches. It's a two-stage process: park and claim.
+The intent system allows assets to be moved across Arkade batches. It's a two-stage process: lock and claim.
 
-1.  **Intent Transaction:** User parks assets in `INTENT` outputs, signaling participation in a batch swap.
-2.  **Commitment Transaction:** Operator claims parked assets via `INTENT` inputs and places them at new VTXOs via `LOCAL` outputs.
+1.  **Intent Transaction:** User locks assets in `INTENT` outputs, signaling participation in a batch swap.
+2.  **Commitment Transaction:** Operator claims locked assets via `INTENT` inputs and places them at new VTXOs via `LOCAL` outputs.
 
 ### Transaction Diagrams
 
@@ -350,7 +350,7 @@ The intent system allows assets to be moved across Arkade batches. It's a two-st
 flowchart LR
   IntentTX[(Intent TX)]
   i0["LOCAL input<br/>• T: 100<br/>from old VTXO"] --> IntentTX
-  IntentTX --> o_intent["INTENT output<br/>• T: 100<br/>• o: 0 (parked)"]
+  IntentTX --> o_intent["INTENT output<br/>• T: 100<br/>• o: 0 (locked)"]
 ```
 
 **Commitment Transaction**
