@@ -153,11 +153,11 @@ AssetRef  := oneof {
 # BY_GROUP forward references are ALLOWED - gidx may reference a group that appears later in the packet.
 
 AssetInput := oneof {
-               0x01 LOCAL  { i: u32, amt: u64 }                  # input from same transaction's prevouts
-             | 0x02 INTENT { txid: bytes32, o: u32, amt: u64 }  # output from intent transaction
+               0x01 LOCAL  { i: u16, amt: varint }              # input from same transaction's prevouts
+             | 0x02 INTENT { txid: bytes32, o: u16, amt: varint }  # output from intent transaction
              }
 
-AssetOutput := { o: u32, amt: u64 }   # output within same transaction
+AssetOutput := { o: u16, amt: varint }   # output within same transaction
 ```
 
 > **Note:** The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
