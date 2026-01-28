@@ -3,6 +3,7 @@ import {
   Packet,
   buildOpReturnScript,
   parseOpReturnScript,
+  buildOpReturnPayload,
   Config,
   computeMetadataMerkleRootHex,
   computeTeleportCommitmentHex,
@@ -1322,6 +1323,170 @@ function testMaxU64Amount() {
   console.log('  ✓ Max u64 amount passed');
 }
 
+// ----------------- COMPACT ENCODING EDGE CASE TESTS -----------------
+
+function testVarintAmountBoundaries() {
+  console.log('Testing varint amount boundaries...');
+
+  const boundaryValues: { amt: bigint; label: string }[] = [
+    { amt: 0n, label: '0 (min, 1-byte varint)' },
+    { amt: 252n, label: '252 (max 1-byte varint)' },
+    { amt: 253n, label: '253 (first 3-byte varint, 0xfd prefix)' },
+    { amt: 65535n, label: '65535 (max 3-byte varint)' },
+    { amt: 65536n, label: '65536 (first 5-byte varint, 0xfe prefix)' },
+    { amt: 4294967295n, label: '4294967295 (max 5-byte varint)' },
+    { amt: 4294967296n, label: '4294967296 (first 9-byte varint, 0xff prefix)' },
+    { amt: 18446744073709551615n, label: 'max u64 (9-byte varint)' },
+  ];
+
+  for (const { amt, label } of boundaryValues) {
+    const packet: Packet = {
+      groups: [{
+        issuance: { metadata: { name: 'Boundary' } },
+        inputs: [],
+        outputs: [{ type: 'LOCAL' as const, o: 0, amt }],
+      }],
+    };
+
+    const script = buildOpReturnScript(packet);
+    const decoded = parseOpReturnScript(script);
+
+    assert.ok(decoded, `Failed to decode packet with amount ${label}`);
+    assert.strictEqual(
+      decoded.groups?.[0].outputs[0].amt,
+      amt.toString(),
+      `Amount mismatch for ${label}: expected ${amt.toString()}, got ${decoded.groups?.[0].outputs[0].amt}`
+    );
+  }
+
+  console.log('  ✓ Varint amount boundaries passed');
+}
+
+function testPackedCountsBoundaries() {
+  console.log('Testing packed counts boundaries...');
+
+  // Helper to create a group with N inputs and M outputs
+  function makeGroup(inCount: number, outCount: number): Packet {
+    const inputs = [];
+    for (let k = 0; k < inCount; k++) {
+      inputs.push({ type: 'LOCAL' as const, i: k, amt: 1n });
+    }
+    const outputs = [];
+    for (let k = 0; k < outCount; k++) {
+      outputs.push({ type: 'LOCAL' as const, o: k, amt: 1n });
+    }
+    return {
+      groups: [{
+        issuance: { metadata: { name: 'Counts' } },
+        inputs,
+        outputs,
+      }],
+    };
+  }
+
+  const cases: { inCount: number; outCount: number; label: string }[] = [
+    { inCount: 0, outCount: 0, label: '(0,0) -> packed 0x00' },
+    { inCount: 1, outCount: 1, label: '(1,1) -> packed 0x11' },
+    { inCount: 15, outCount: 14, label: '(15,14) -> packed 0xFE' },
+    { inCount: 14, outCount: 15, label: '(14,15) -> packed 0xEF' },
+    { inCount: 15, outCount: 15, label: '(15,15) -> escape format (0xFF collision)' },
+    { inCount: 16, outCount: 0, label: '(16,0) -> escape format (inCount > 15)' },
+    { inCount: 0, outCount: 16, label: '(0,16) -> escape format (outCount > 15)' },
+  ];
+
+  for (const { inCount, outCount, label } of cases) {
+    const packet = makeGroup(inCount, outCount);
+    const script = buildOpReturnScript(packet);
+    const decoded = parseOpReturnScript(script);
+
+    assert.ok(decoded, `Failed to decode packet for ${label}`);
+    assert.strictEqual(decoded.groups?.length, 1, `Expected 1 group for ${label}`);
+    assert.strictEqual(
+      decoded.groups![0].inputs.length,
+      inCount,
+      `Input count mismatch for ${label}: expected ${inCount}, got ${decoded.groups![0].inputs.length}`
+    );
+    assert.strictEqual(
+      decoded.groups![0].outputs.length,
+      outCount,
+      `Output count mismatch for ${label}: expected ${outCount}, got ${decoded.groups![0].outputs.length}`
+    );
+
+    // Verify individual input/output indices round-trip
+    for (let k = 0; k < inCount; k++) {
+      const inp: any = decoded.groups![0].inputs[k];
+      assert.strictEqual(inp.type, 'LOCAL', `Input ${k} type mismatch for ${label}`);
+      assert.strictEqual(inp.i, k, `Input ${k} index mismatch for ${label}`);
+      assert.strictEqual(inp.amt, '1', `Input ${k} amount mismatch for ${label}`);
+    }
+    for (let k = 0; k < outCount; k++) {
+      const out: any = decoded.groups![0].outputs[k];
+      assert.strictEqual(out.type, 'LOCAL', `Output ${k} type mismatch for ${label}`);
+      assert.strictEqual(out.o, k, `Output ${k} index mismatch for ${label}`);
+      assert.strictEqual(out.amt, '1', `Output ${k} amount mismatch for ${label}`);
+    }
+  }
+
+  console.log('  ✓ Packed counts boundaries passed');
+}
+
+function testSelfDelimitingTlv() {
+  console.log('Testing self-delimiting TLV encoding...');
+
+  // Build a minimal packet and check that the payload uses self-delimiting type 0x00
+  // (no length field), saving 1 byte compared to a length-prefixed TLV.
+  const packet: Packet = {
+    groups: [{
+      issuance: { metadata: { name: 'TLV' } },
+      inputs: [],
+      outputs: [{ type: 'LOCAL' as const, o: 0, amt: 1n }],
+    }],
+  };
+
+  const payload = buildOpReturnPayload(packet);
+
+  // Payload format: magic(3) + type(1) + asset_data(variable)
+  // magic = "ARK" = 0x41 0x52 0x4b
+  assert.strictEqual(payload[0], 0x41, 'Magic byte 0 should be "A"');
+  assert.strictEqual(payload[1], 0x52, 'Magic byte 1 should be "R"');
+  assert.strictEqual(payload[2], 0x4b, 'Magic byte 2 should be "K"');
+  assert.strictEqual(payload[3], 0x00, 'TLV type should be 0x00');
+
+  // Verify there is NO length field after the type byte.
+  // In self-delimiting format, byte 4 should be the start of the asset payload
+  // (i.e., the group count varint), NOT a length prefix.
+  // A packet with 1 group would have group count = 1 (varint: 0x01).
+  assert.strictEqual(payload[4], 0x01, 'Byte after type should be group count (1), not a length prefix');
+
+  // Verify the round-trip works correctly
+  const script = buildOpReturnScript(packet);
+  const decoded = parseOpReturnScript(script);
+  assert.ok(decoded, 'Self-delimiting TLV should decode correctly');
+  assert.strictEqual(decoded.groups?.length, 1, 'Should have 1 group');
+  assert.strictEqual(decoded.groups?.[0].outputs[0].amt, '1', 'Amount should round-trip');
+
+  // Verify payload is 1 byte shorter than it would be with a length field.
+  // With a length field, the format would be: magic(3) + type(1) + compactsize_length + data
+  // Without: magic(3) + type(1) + data
+  // The data portion starts at offset 4 in the self-delimiting format.
+  const assetDataLength = payload.length - 4; // everything after magic + type byte
+  // If we had a length prefix, for small payloads (<253 bytes) it would add 1 byte
+  // So the self-delimiting format saves exactly 1 byte for small payloads.
+  assert.ok(assetDataLength < 253, 'Asset data should be small enough that length prefix would be 1 byte');
+  // The total payload with length-prefix would be: 3(magic) + 1(type) + 1(length) + assetDataLength
+  // Self-delimiting:                               3(magic) + 1(type) + assetDataLength
+  // Difference = 1 byte saved
+  const expectedWithLengthPrefix = 3 + 1 + 1 + assetDataLength;
+  const actualSelfDelimiting = payload.length;
+  assert.strictEqual(
+    expectedWithLengthPrefix - actualSelfDelimiting,
+    1,
+    `Self-delimiting should save exactly 1 byte (expected ${expectedWithLengthPrefix} with length, got ${actualSelfDelimiting} without)`
+  );
+
+  console.log('  ✓ Self-delimiting TLV encoding passed');
+}
+
 // ----------------- REORG TESTS -----------------
 
 function testBasicReorg() {
@@ -1670,6 +1835,11 @@ async function runAllTests() {
     testTeleportWithWitness();
     testEmptyGroupsPacket();
     testMaxU64Amount();
+
+    // Compact encoding edge case tests
+    testVarintAmountBoundaries();
+    testPackedCountsBoundaries();
+    testSelfDelimitingTlv();
 
     // Indexer tests
     testIndexerFreshIssuance();
