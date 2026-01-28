@@ -462,9 +462,23 @@ export function encodeGroup(group: Group): Uint8Array {
   } else {
     throw new Error('Implement your canonical TLV tagging here.');
   }
-  byteList.push(encodeVarUint(group.inputs.length));
+
+  // Packed counts encoding
+  const inCount = group.inputs.length;
+  const outCount = group.outputs.length;
+  const packed = (inCount << 4) | outCount;
+  if (inCount <= 15 && outCount <= 15 && packed !== 0xff) {
+    // Pack into single byte: high nibble = inputs, low nibble = outputs
+    // Note: 0xFF is reserved as escape byte, so (15, 15) uses escape format
+    byteList.push(new Uint8Array([packed]));
+  } else {
+    // Escape byte + two varints
+    byteList.push(new Uint8Array([0xff]));
+    byteList.push(encodeVarUint(inCount));
+    byteList.push(encodeVarUint(outCount));
+  }
+
   for (const inp of group.inputs) byteList.push(encodeAssetInput(inp));
-  byteList.push(encodeVarUint(group.outputs.length));
   for (const out of group.outputs) byteList.push(encodeAssetOutput(out));
   return concatBytes(...byteList);
 }
