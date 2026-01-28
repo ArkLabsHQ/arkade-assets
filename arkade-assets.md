@@ -149,6 +149,16 @@ Instead of using a type marker for each optional field within a `Group`, the imp
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
 
+**Amount Encoding: Varint**
+
+All amount fields use Bitcoin's CompactSize varint encoding:
+- `0x00-0xFC`: 1 byte (values 0-252)
+- `0xFD` + u16: 3 bytes (values 253-65535)
+- `0xFE` + u32: 5 bytes (values 65536-4294967295)
+- `0xFF` + u64: 9 bytes (values > 4294967295)
+
+This saves 7 bytes per NFT amount (amt=1) compared to fixed u64.
+
 **Variant Types: Type Markers**
 
 For data structures that represent one of several variants (a `oneof` structure), a **type marker byte** is used. This is consistent with the logical TLV model.
