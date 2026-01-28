@@ -224,6 +224,27 @@ function encodeCompactSize(n: number): Uint8Array {
   return concatBytes(new Uint8Array([0xff]), writeU64(n, true));
 }
 
+function encodeCompactSizeBigInt(n: bigint): Uint8Array {
+  if (n < 0n) throw new Error('Amount must be >= 0');
+  if (n < 0xfdn) return new Uint8Array([Number(n)]);
+  if (n <= 0xffffn) {
+    const buf = new Uint8Array(3);
+    buf[0] = 0xfd;
+    new DataView(buf.buffer).setUint16(1, Number(n), true);
+    return buf;
+  }
+  if (n <= 0xffffffffn) {
+    const buf = new Uint8Array(5);
+    buf[0] = 0xfe;
+    new DataView(buf.buffer).setUint32(1, Number(n), true);
+    return buf;
+  }
+  const buf = new Uint8Array(9);
+  buf[0] = 0xff;
+  new DataView(buf.buffer).setBigUint64(1, n, true);
+  return buf;
+}
+
 function decodeCompactSize(buf: Uint8Array, off: number): { value: number; size: number } {
   if (off >= buf.length) throw new Error('decodeCompactSize OOB');
   const ch = buf[off];
@@ -382,36 +403,35 @@ export function decodeTeleportWitness(buf: Uint8Array, off: number): { witness: 
 
 function encodeAssetInput(input: AssetInput): Uint8Array {
   if (input.type === 'LOCAL') {
-    const buf = new Uint8Array(11);
-    buf[0] = 0x01;
-    new DataView(buf.buffer).setUint16(1, input.i, true);
-    new DataView(buf.buffer).setBigUint64(3, BigInt(input.amt), true);
-    return buf;
+    // Format: type(1) + index(2) + varint(amt) - variable length
+    const typeBuf = new Uint8Array([0x01]);
+    const indexBuf = writeU16(input.i, true);
+    const amtBuf = encodeCompactSizeBigInt(BigInt(input.amt));
+    return concatBytes(typeBuf, indexBuf, amtBuf);
   } else if (input.type === 'TELEPORT') {
-    // Format: type(1) + amt(8) + witness(variable)
+    // Format: type(1) + varint(amt) + witness(variable)
     // Commitment is derived from witness as sha256(paymentScript || nonce)
-    const baseBuf = new Uint8Array(9);
-    baseBuf[0] = 0x02;
-    new DataView(baseBuf.buffer).setBigUint64(1, BigInt(input.amt), true);
+    const typeBuf = new Uint8Array([0x02]);
+    const amtBuf = encodeCompactSizeBigInt(BigInt(input.amt));
     const witnessBuf = encodeTeleportWitness(input.witness);
-    return concatBytes(baseBuf, witnessBuf);
+    return concatBytes(typeBuf, amtBuf, witnessBuf);
   }
   throw new Error(`Unknown input type: ${(input as any).type}`);
 }
 
 function encodeAssetOutput(output: AssetOutput): Uint8Array {
   if (output.type === 'LOCAL') {
-    const buf = new Uint8Array(11);
-    buf[0] = 0x01;
-    new DataView(buf.buffer).setUint16(1, output.o, true);
-    new DataView(buf.buffer).setBigUint64(3, BigInt(output.amt), true);
-    return buf;
+    // Format: type(1) + index(2) + varint(amt) - variable length
+    const typeBuf = new Uint8Array([0x01]);
+    const indexBuf = writeU16(output.o, true);
+    const amtBuf = encodeCompactSizeBigInt(BigInt(output.amt));
+    return concatBytes(typeBuf, indexBuf, amtBuf);
   } else if (output.type === 'TELEPORT') {
-    const buf = new Uint8Array(41);
-    buf[0] = 0x02;
-    buf.set(hexToBytes(output.commitment), 1);
-    new DataView(buf.buffer).setBigUint64(33, BigInt(output.amt), true);
-    return buf;
+    // Format: type(1) + commitment(32) + varint(amt) - variable length
+    const typeBuf = new Uint8Array([0x02]);
+    const commitmentBuf = hexToBytes(output.commitment);
+    const amtBuf = encodeCompactSizeBigInt(BigInt(output.amt));
+    return concatBytes(typeBuf, commitmentBuf, amtBuf);
   }
   throw new Error(`Unknown output type: ${(output as any).type}`);
 }
