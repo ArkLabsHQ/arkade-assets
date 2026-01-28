@@ -189,6 +189,60 @@ AssetOutput := { o: u16, amt: varint }   # output within same transaction
 
 > **Note:** The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
 
+### 3.2. Complete Binary Encoding Reference
+
+For implementers, here is the complete binary format:
+
+```
+# OP_RETURN Structure
+OP_RETURN := "ARK" || Record+
+
+Record := oneof {
+  0x00-0x3F: Type || Payload                    # no length, self-delimiting
+  0x40-0x7F: Type || Length:varint || Payload   # length present, spec-defined
+  0x80-0xFF: Type || Length:varint || Payload   # length present, extensions
+}
+
+# Type 0x00: Assets (self-delimiting)
+Packet := {
+  GroupCount: varint
+  Groups[GroupCount]: Group
+}
+
+Group := {
+  Presence: u8                    # bits: 0x01=AssetId, 0x02=ControlAsset, 0x04=Metadata
+  AssetId?: AssetId               # if presence & 0x01
+  ControlAsset?: AssetRef         # if presence & 0x02 (genesis only)
+  Metadata?: Metadata             # if presence & 0x04 (genesis only)
+  Counts: PackedCounts
+  Inputs[]: AssetInput
+  Outputs[]: AssetOutput
+}
+
+PackedCounts := oneof {
+  0x00-0xFE: u8                   # high nibble = in_count, low nibble = out_count
+  0xFF: varint || varint          # in_count || out_count (when either >15)
+}
+
+AssetId := { txid: bytes32, gidx: u16 }
+
+AssetRef := oneof {
+  0x01 BY_ID:    AssetId
+  0x02 BY_GROUP: u16              # gidx reference within same packet
+}
+
+Metadata := {
+  Count: varint
+  Entries[Count]: { key_len: varint, key: bytes, value_len: varint, value: bytes }
+}
+
+AssetInput := oneof {
+  0x01 LOCAL:  { i: u16, amt: varint }
+  0x02 INTENT: { txid: bytes32, o: u16, amt: varint }
+}
+
+AssetOutput := { o: u16, amt: varint }
+```
 
 ---
 
