@@ -263,6 +263,25 @@ function decodeCompactSize(buf: Uint8Array, off: number): { value: number; size:
   return { value: Number(v), size: 9 };
 }
 
+function decodeCompactSizeBigInt(buf: Uint8Array, off: number): { value: bigint; size: number } {
+  if (off >= buf.length) throw new Error('decodeCompactSizeBigInt OOB');
+  const ch = buf[off];
+  if (ch < 0xfd) return { value: BigInt(ch), size: 1 };
+  if (ch === 0xfd) {
+    if (off + 3 > buf.length) throw new Error('decodeCompactSizeBigInt 0xfd OOB');
+    const val = new DataView(buf.buffer, buf.byteOffset + off + 1, 2).getUint16(0, true);
+    return { value: BigInt(val), size: 3 };
+  }
+  if (ch === 0xfe) {
+    if (off + 5 > buf.length) throw new Error('decodeCompactSizeBigInt 0xfe OOB');
+    const val = new DataView(buf.buffer, buf.byteOffset + off + 1, 4).getUint32(0, true);
+    return { value: BigInt(val), size: 5 };
+  }
+  if (off + 9 > buf.length) throw new Error('decodeCompactSizeBigInt 0xff OOB');
+  const val = new DataView(buf.buffer, buf.byteOffset + off + 1, 8).getBigUint64(0, true);
+  return { value: val, size: 9 };
+}
+
 function encodeVarUint(n: number): Uint8Array {
   return encodeCompactSize(n);
 }
@@ -510,11 +529,19 @@ function decodeTlvStream(buf: Uint8Array, off: number): { records: { type: numbe
   while (cursor < buf.length) {
     const type = buf[cursor];
     cursor += 1;
-    const lenResult = decodeCompactSize(buf, cursor);
-    cursor += lenResult.size;
-    const value = buf.slice(cursor, cursor + lenResult.value);
-    cursor += lenResult.value;
-    records.push({ type, value });
+    if (type <= 0x3f) {
+      // Self-delimiting: rest of buffer is the payload
+      const value = buf.slice(cursor);
+      cursor = buf.length;
+      records.push({ type, value });
+    } else {
+      // 0x40-0xFF: length-prefixed
+      const lenResult = decodeCompactSize(buf, cursor);
+      cursor += lenResult.size;
+      const value = buf.slice(cursor, cursor + lenResult.value);
+      cursor += lenResult.value;
+      records.push({ type, value });
+    }
   }
   return { records, next: cursor };
 }
@@ -579,18 +606,15 @@ function decodeAssetInput(buf: Uint8Array, off: number): { input: AssetInput; ne
   if (off >= buf.length) throw new Error('decodeAssetInput OOB');
   const inputType = buf[off];
   if (inputType === 0x01) { // LOCAL
-    if (off + 11 > buf.length) throw new Error('decodeAssetInput LOCAL OOB');
-    const view = new DataView(buf.buffer, buf.byteOffset + off, 11);
+    if (off + 3 > buf.length) throw new Error('decodeAssetInput LOCAL OOB');
+    const view = new DataView(buf.buffer, buf.byteOffset + off, 3);
     const i = view.getUint16(1, Config.u16LE);
-    const amt = view.getBigUint64(3, Config.u64LE);
-    return { input: { type: 'LOCAL', i, amt: amt.toString() }, next: off + 11 };
+    const amtResult = decodeCompactSizeBigInt(buf, off + 3);
+    return { input: { type: 'LOCAL', i, amt: amtResult.value.toString() }, next: off + 3 + amtResult.size };
   } else if (inputType === 0x02) { // TELEPORT
-    // Format: type(1) + amt(8) + witness(variable)
-    if (off + 9 > buf.length) throw new Error('decodeAssetInput TELEPORT OOB');
-    const view = new DataView(buf.buffer, buf.byteOffset + off);
-    const amt = view.getBigUint64(1, Config.u64LE);
-    const { witness, next } = decodeTeleportWitness(buf, off + 9);
-    return { input: { type: 'TELEPORT', amt: amt.toString(), witness }, next };
+    const amtResult = decodeCompactSizeBigInt(buf, off + 1);
+    const { witness, next } = decodeTeleportWitness(buf, off + 1 + amtResult.size);
+    return { input: { type: 'TELEPORT', amt: amtResult.value.toString(), witness }, next };
   }
   throw new Error(`Unknown input type: ${inputType}`);
 }
@@ -599,17 +623,16 @@ function decodeAssetOutput(buf: Uint8Array, off: number): { output: AssetOutput;
   if (off >= buf.length) throw new Error('decodeAssetOutput OOB');
   const outputType = buf[off];
   if (outputType === 0x01) { // LOCAL
-    if (off + 11 > buf.length) throw new Error('decodeAssetOutput LOCAL OOB');
-    const view = new DataView(buf.buffer, buf.byteOffset + off, 11);
+    if (off + 3 > buf.length) throw new Error('decodeAssetOutput LOCAL OOB');
+    const view = new DataView(buf.buffer, buf.byteOffset + off, 3);
     const o = view.getUint16(1, Config.u16LE);
-    const amt = view.getBigUint64(3, Config.u64LE);
-    return { output: { type: 'LOCAL', o, amt: amt.toString() }, next: off + 11 };
+    const amtResult = decodeCompactSizeBigInt(buf, off + 3);
+    return { output: { type: 'LOCAL', o, amt: amtResult.value.toString() }, next: off + 3 + amtResult.size };
   } else if (outputType === 0x02) { // TELEPORT
-    if (off + 41 > buf.length) throw new Error('decodeAssetOutput TELEPORT OOB');
+    if (off + 33 > buf.length) throw new Error('decodeAssetOutput TELEPORT OOB');
     const commitment = bytesToHex(buf.slice(off + 1, off + 33));
-    const view = new DataView(buf.buffer, buf.byteOffset + off);
-    const amt = view.getBigUint64(33, Config.u64LE);
-    return { output: { type: 'TELEPORT', commitment, amt: amt.toString() }, next: off + 41 };
+    const amtResult = decodeCompactSizeBigInt(buf, off + 33);
+    return { output: { type: 'TELEPORT', commitment, amt: amtResult.value.toString() }, next: off + 33 + amtResult.size };
   }
   throw new Error(`Unknown output type: ${outputType}`);
 }
@@ -635,13 +658,28 @@ export function decodeGroup(buf: Uint8Array, off: number): { group: Group; next:
   if (presence & 2) { const r = decodeIssuance(buf, cursor); group.issuance = r.issuance; cursor = r.next; }
   if (presence & 4) { const r = decodeMetadataMap(buf, cursor); group.metadata = r.map; cursor = r.next; }
 
-  const vin = decodeVarUint(buf, cursor);
-  cursor += vin.size;
-  for (let k = 0; k < vin.value; k++) { const r = decodeAssetInput(buf, cursor); group.inputs.push(r.input); cursor = r.next; }
+  // Decode packed counts
+  if (cursor >= buf.length) throw new Error('decodeGroup counts OOB');
+  let inCount: number, outCount: number;
+  const countsByte = buf[cursor];
+  if (countsByte === 0xff) {
+    // Escape: two separate varints
+    cursor += 1;
+    const vinCount = decodeVarUint(buf, cursor);
+    cursor += vinCount.size;
+    inCount = vinCount.value;
+    const voutCount = decodeVarUint(buf, cursor);
+    cursor += voutCount.size;
+    outCount = voutCount.value;
+  } else {
+    // Packed: high nibble = inputs, low nibble = outputs
+    inCount = (countsByte >> 4) & 0x0f;
+    outCount = countsByte & 0x0f;
+    cursor += 1;
+  }
 
-  const vout = decodeVarUint(buf, cursor);
-  cursor += vout.size;
-  for (let k = 0; k < vout.value; k++) { const r = decodeAssetOutput(buf, cursor); group.outputs.push(r.output); cursor = r.next; }
+  for (let k = 0; k < inCount; k++) { const r = decodeAssetInput(buf, cursor); group.inputs.push(r.input); cursor = r.next; }
+  for (let k = 0; k < outCount; k++) { const r = decodeAssetOutput(buf, cursor); group.outputs.push(r.output); cursor = r.next; }
 
   return { group, next: cursor };
 }
