@@ -113,12 +113,26 @@ Group := {
   AssetId?      : AssetId          # absent => fresh asset (AssetId* = (this_txid, group_index))
   ControlAsset? : AssetRef         # Genesis only: Defines the control asset for reissuance.
   Metadata?     : map<string, string> # Genesis only: Immutable metadata set at asset creation.
-  InputCount    : varuint
-  Inputs[InputCount]  : AssetInput
-  OutputCount   : varuint
-  Outputs[OutputCount] : AssetOutput
+  Counts        : PackedCounts
+  Inputs[]      : AssetInput
+  Outputs[]     : AssetOutput
 }
 ```
+
+### PackedCounts
+
+Encodes input and output counts in a single byte when both are ≤15 (common case):
+
+```
+PackedCounts := oneof {
+  0x00-0xFE: u8     # high nibble = input_count, low nibble = output_count (both ≤15)
+  0xFF: escape      # followed by varint(input_count) || varint(output_count)
+}
+```
+
+Examples:
+- `0x32` = 3 inputs, 2 outputs (typical transfer)
+- `0xFF 0x14 0x05` = 20 inputs, 5 outputs (rare large tx)
 
 ### 3.1. Encoding Details
 
