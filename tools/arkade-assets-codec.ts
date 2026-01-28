@@ -493,8 +493,8 @@ export function encodePacket(packet: Packet): Uint8Array {
 export function buildOpReturnPayload(packet: Packet): Uint8Array {
   const magic = hexToBytes('41524b'); // "ARK"
   const assetPayload = encodePacket(packet);
-  const tlvStream = encodeTlv(0x00, assetPayload);
-  return concatBytes(magic, tlvStream);
+  // Type 0x00 is self-delimiting (no length field)
+  return concatBytes(magic, new Uint8Array([0x00]), assetPayload);
 }
 
 export function buildOpReturnScript(packet: Packet): Uint8Array {
