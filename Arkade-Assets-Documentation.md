@@ -74,16 +74,19 @@ scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 
 - **Magic_Bytes**: `0x41524b` ("ARK")
 - **TLV_Stream**: A concatenation of one or more TLV records.
-- **TLV Record**: `Type (1-byte) || Length (CompactSize) || Value (bytes)`
+- **TLV Record**: Format determined by type byte range:
+  - `0x00-0x3F`: Self-delimiting types. `Type || Payload` (no length field)
+  - `0x40-0x7F`: Variable-length spec types. `Type || Length (varint) || Payload`
+  - `0x80-0xFF`: Extensions. `Type || Length (varint) || Payload` (parsers can skip unknown)
 
 **Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
 
 ### Arkade Asset V1 Packet (Type 0x00)
 
-The Arkade Asset data is identified by `Type = 0x00`. The `Value` of this record is the asset payload itself.
+The Arkade Asset data is identified by `Type = 0x00`. As a self-delimiting type (range 0x00-0x3F), no length field is needed.
 
 ```
-<Type: 0x00> <Length: L> <Value: Asset_Payload>
+<Type: 0x00> <Asset_Payload>
 ```
 
 - **Asset_Payload**: The TLV packet containing asset group data (see below).
@@ -110,12 +113,26 @@ Group := {
   AssetId?      : AssetId          # absent => fresh asset (AssetId* = (this_txid, group_index))
   ControlAsset? : AssetRef         # Genesis only: Defines the control asset for reissuance.
   Metadata?     : map<string, string> # Genesis only: Immutable metadata set at asset creation.
-  InputCount    : varuint
-  Inputs[InputCount]  : AssetInput
-  OutputCount   : varuint
-  Outputs[OutputCount] : AssetOutput
+  Counts        : PackedCounts
+  Inputs[]      : AssetInput
+  Outputs[]     : AssetOutput
 }
 ```
+
+### PackedCounts
+
+Encodes input and output counts in a single byte when both are ≤15 (common case):
+
+```
+PackedCounts := oneof {
+  0x00-0xFE: u8     # high nibble = input_count, low nibble = output_count (both ≤15)
+  0xFF: escape      # followed by varint(input_count) || varint(output_count)
+}
+```
+
+Examples:
+- `0x32` = 3 inputs, 2 outputs (typical transfer)
+- `0xFF 0x14 0x05` = 20 inputs, 5 outputs (rare large tx)
 
 ### 3.1. Encoding Details
 
@@ -131,6 +148,16 @@ Instead of using a type marker for each optional field within a `Group`, the imp
 -   `bits 3-7`: Reserved for future protocol extensions. Parsers MUST ignore these bits if set.
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
+
+**Amount Encoding: Varint**
+
+All amount fields use Bitcoin's CompactSize varint encoding:
+- `0x00-0xFC`: 1 byte (values 0-252)
+- `0xFD` + u16: 3 bytes (values 253-65535)
+- `0xFE` + u32: 5 bytes (values 65536-4294967295)
+- `0xFF` + u64: 9 bytes (values > 4294967295)
+
+This saves 7 bytes per NFT amount (amt=1) compared to fixed u64.
 
 **Variant Types: Type Markers**
 
@@ -153,15 +180,69 @@ AssetRef  := oneof {
 # BY_GROUP forward references are ALLOWED - gidx may reference a group that appears later in the packet.
 
 AssetInput := oneof {
-               0x01 LOCAL  { i: u32, amt: u64 }                  # input from same transaction's prevouts
-             | 0x02 INTENT { txid: bytes32, o: u32, amt: u64 }  # output from intent transaction
+               0x01 LOCAL  { i: u16, amt: varint }              # input from same transaction's prevouts
+             | 0x02 INTENT { txid: bytes32, o: u16, amt: varint }  # output from intent transaction
              }
 
-AssetOutput := { o: u32, amt: u64 }   # output within same transaction
+AssetOutput := { o: u16, amt: varint }   # output within same transaction
 ```
 
 > **Note:** The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
 
+### 3.2. Complete Binary Encoding Reference
+
+For implementers, here is the complete binary format:
+
+```
+# OP_RETURN Structure
+OP_RETURN := "ARK" || Record+
+
+Record := oneof {
+  0x00-0x3F: Type || Payload                    # no length, self-delimiting
+  0x40-0x7F: Type || Length:varint || Payload   # length present, spec-defined
+  0x80-0xFF: Type || Length:varint || Payload   # length present, extensions
+}
+
+# Type 0x00: Assets (self-delimiting)
+Packet := {
+  GroupCount: varint
+  Groups[GroupCount]: Group
+}
+
+Group := {
+  Presence: u8                    # bits: 0x01=AssetId, 0x02=ControlAsset, 0x04=Metadata
+  AssetId?: AssetId               # if presence & 0x01
+  ControlAsset?: AssetRef         # if presence & 0x02 (genesis only)
+  Metadata?: Metadata             # if presence & 0x04 (genesis only)
+  Counts: PackedCounts
+  Inputs[]: AssetInput
+  Outputs[]: AssetOutput
+}
+
+PackedCounts := oneof {
+  0x00-0xFE: u8                   # high nibble = in_count, low nibble = out_count
+  0xFF: varint || varint          # in_count || out_count (when either >15)
+}
+
+AssetId := { txid: bytes32, gidx: u16 }
+
+AssetRef := oneof {
+  0x01 BY_ID:    AssetId
+  0x02 BY_GROUP: u16              # gidx reference within same packet
+}
+
+Metadata := {
+  Count: varint
+  Entries[Count]: { key_len: varint, key: bytes, value_len: varint, value: bytes }
+}
+
+AssetInput := oneof {
+  0x01 LOCAL:  { i: u16, amt: varint }
+  0x02 INTENT: { txid: bytes32, o: u16, amt: varint }
+}
+
+AssetOutput := { o: u16, amt: varint }
+```
 
 ---
 
@@ -408,7 +489,6 @@ These rules ensure that:
 
 
 <div style="page-break-after: always;"></div>
-
 
 # Arkade Script Opcodes
 
@@ -703,8 +783,9 @@ require(group.control == expectedControlId, "Wrong control asset");
 
 <div style="page-break-after: always;"></div>
 
-
 # Arkade Asset Transaction Examples
+
+> **Note:** Amount fields use varint encoding. Small values (0-252) use 1 byte, large values use more. The TypeScript codec handles this automatically.
 
 ---
 
@@ -1305,7 +1386,6 @@ flowchart LR
 
 <div style="page-break-after: always;"></div>
 
-
 # ArkadeKitties: A Trustless Collectible Game on Ark
 
 This document outlines the design for ArkadeKitties, a decentralized game for collecting and breeding unique digital cats, built entirely on the Ark protocol using Arkade Assets and Arkade Script.
@@ -1641,5 +1721,4 @@ This two-step process ensures that neither the user nor the oracle can unilatera
 
 
 <div style="page-break-after: always;"></div>
-
 
