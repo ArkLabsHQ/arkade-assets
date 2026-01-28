@@ -74,16 +74,19 @@ scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 
 - **Magic_Bytes**: `0x41524b` ("ARK")
 - **TLV_Stream**: A concatenation of one or more TLV records.
-- **TLV Record**: `Type (1-byte) || Length (CompactSize) || Value (bytes)`
+- **TLV Record**: Format determined by type byte range:
+  - `0x00-0x3F`: Self-delimiting types. `Type || Payload` (no length field)
+  - `0x40-0x7F`: Variable-length spec types. `Type || Length (varint) || Payload`
+  - `0x80-0xFF`: Extensions. `Type || Length (varint) || Payload` (parsers can skip unknown)
 
 **Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
 
 ### Arkade Asset V1 Packet (Type 0x00)
 
-The Arkade Asset data is identified by `Type = 0x00`. The `Value` of this record is the asset payload itself.
+The Arkade Asset data is identified by `Type = 0x00`. As a self-delimiting type (range 0x00-0x3F), no length field is needed.
 
 ```
-<Type: 0x00> <Length: L> <Value: Asset_Payload>
+<Type: 0x00> <Asset_Payload>
 ```
 
 - **Asset_Payload**: The TLV packet containing asset group data (see below).
