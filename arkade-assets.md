@@ -135,9 +135,9 @@ Instead of using a type marker for each optional field within a `Group`, the imp
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
 
-**Byte Order: Big-Endian**
+**Byte Order: Little-Endian**
 
-All multi-byte integer fields (u16) are encoded in **big-endian** (network byte order). This applies to:
+All multi-byte integer fields are encoded in **little-endian**, consistent with Bitcoin's serialization convention. This applies to:
 - `gidx` fields in `AssetId` and `AssetRef`
 - `i` (input index) in `AssetInput`
 - `o` (output index) in `AssetOutput`
@@ -149,8 +149,6 @@ All amount fields use Bitcoin's CompactSize varint encoding:
 - `0xFD` + u16 LE: 3 bytes (values 253-65535)
 - `0xFE` + u32 LE: 5 bytes (values 65536-4294967295)
 - `0xFF` + u64 LE: 9 bytes (values > 4294967295)
-
-Note: The varint payload bytes use little-endian per Bitcoin's CompactSize specification, while index fields use big-endian.
 
 This saves 7 bytes per NFT amount (amt=1) compared to fixed u64.
 
@@ -165,23 +163,23 @@ Type marker values are interpreted in the context of the structure being parsed;
 
 ### Types
 
-All u16 fields are big-endian encoded.
+All multi-byte integer fields are little-endian encoded (matching Bitcoin's convention).
 
 ```
-AssetId   := { txid: bytes32, gidx: u16 BE } # genesis tx id + group index
+AssetId   := { txid: bytes32, gidx: u16 LE } # genesis tx id + group index
 
 AssetRef  := oneof {
                0x01 BY_ID    { assetid: AssetId } # if existing asset
-             | 0x02 BY_GROUP { gidx: u16 BE } # if fresh asset (does not exist yet therefore no AssetId)
+             | 0x02 BY_GROUP { gidx: u16 LE } # if fresh asset (does not exist yet therefore no AssetId)
              }
 # BY_GROUP forward references are ALLOWED - gidx may reference a group that appears later in the packet.
 
 AssetInput := oneof {
-               0x01 LOCAL  { i: u16 BE, amt: varint }              # input from same transaction's prevouts
-             | 0x02 INTENT { txid: bytes32, o: u16 BE, amt: varint }  # output from intent transaction
+               0x01 LOCAL  { i: u16 LE, amt: varint }              # input from same transaction's prevouts
+             | 0x02 INTENT { txid: bytes32, o: u16 LE, amt: varint }  # output from intent transaction
              }
 
-AssetOutput := { o: u16 BE, amt: varint }   # output within same transaction
+AssetOutput := { o: u16 LE, amt: varint }   # output within same transaction
 ```
 
 > **Note:** The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
@@ -217,11 +215,11 @@ Group := {
   Outputs[OutputCount]: AssetOutput
 }
 
-AssetId := { txid: bytes32, gidx: u16 BE }
+AssetId := { txid: bytes32, gidx: u16 LE }
 
 AssetRef := oneof {
   0x01 BY_ID:    AssetId
-  0x02 BY_GROUP: u16 BE           # gidx reference within same packet
+  0x02 BY_GROUP: u16 LE           # gidx reference within same packet
 }
 
 Metadata := {
@@ -230,11 +228,11 @@ Metadata := {
 }
 
 AssetInput := oneof {
-  0x01 LOCAL:  { i: u16 BE, amt: varint }
-  0x02 INTENT: { txid: bytes32, o: u16 BE, amt: varint }
+  0x01 LOCAL:  { i: u16 LE, amt: varint }
+  0x02 INTENT: { txid: bytes32, o: u16 LE, amt: varint }
 }
 
-AssetOutput := { o: u16 BE, amt: varint }
+AssetOutput := { o: u16 LE, amt: varint }
 ```
 
 ---

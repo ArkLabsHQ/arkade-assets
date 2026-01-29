@@ -137,7 +137,7 @@ export interface Nft {
 // ----------------- CONFIG -----------------
 
 export const Config: ConfigType = {
-  u16LE: false,  // Big-endian for u16 fields
+  u16LE: true,   // Little-endian for u16 fields (matches Bitcoin style)
   u64LE: true,
   txidLE: false,
   varuint: 'compactsize',
@@ -422,7 +422,7 @@ export function decodeTeleportWitness(buf: Uint8Array, off: number): { witness: 
 
 function encodeAssetInput(input: AssetInput): Uint8Array {
   if (input.type === 'LOCAL') {
-    // Format: type(1) + index(2, BE) + varint(amt)
+    // Format: type(1) + index(2, LE) + varint(amt)
     const typeBuf = new Uint8Array([0x01]);
     const indexBuf = writeU16(input.i, Config.u16LE);
     const amtBuf = encodeCompactSizeBigInt(BigInt(input.amt));
@@ -440,7 +440,7 @@ function encodeAssetInput(input: AssetInput): Uint8Array {
 
 function encodeAssetOutput(output: AssetOutput): Uint8Array {
   if (output.type === 'LOCAL') {
-    // Format: type(1) + index(2, BE) + varint(amt)
+    // Format: type(1) + index(2, LE) + varint(amt)
     const typeBuf = new Uint8Array([0x01]);
     const indexBuf = writeU16(output.o, Config.u16LE);
     const amtBuf = encodeCompactSizeBigInt(BigInt(output.amt));

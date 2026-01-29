@@ -1362,13 +1362,13 @@ function testVarintAmountBoundaries() {
   console.log('  ✓ Varint amount boundaries passed');
 }
 
-function testBigEndianIndexEncoding() {
-  console.log('Testing big-endian index encoding...');
+function testLittleEndianIndexEncoding() {
+  console.log('Testing little-endian index encoding...');
 
-  // Test that u16 index fields are encoded in big-endian
+  // Test that u16 index fields are encoded in little-endian (matching Bitcoin convention)
   const packet: Packet = {
     groups: [{
-      issuance: { metadata: { name: 'BE Test' } },
+      issuance: { metadata: { name: 'LE Test' } },
       inputs: [{ type: 'LOCAL' as const, i: 0x0102, amt: 1n }],  // 258 decimal
       outputs: [{ type: 'LOCAL' as const, o: 0x0304, amt: 1n }], // 772 decimal
     }],
@@ -1377,7 +1377,7 @@ function testBigEndianIndexEncoding() {
   const script = buildOpReturnScript(packet);
   const decoded = parseOpReturnScript(script);
 
-  assert.ok(decoded, 'Should decode BE packet');
+  assert.ok(decoded, 'Should decode LE packet');
   assert.strictEqual(decoded.groups?.[0].inputs[0].type, 'LOCAL');
   const inp = decoded.groups![0].inputs[0] as any;
   assert.strictEqual(inp.i, 0x0102, 'Input index should round-trip correctly');
@@ -1385,13 +1385,11 @@ function testBigEndianIndexEncoding() {
   const out = decoded.groups![0].outputs[0] as any;
   assert.strictEqual(out.o, 0x0304, 'Output index should round-trip correctly');
 
-  // Verify the actual bytes in the payload are big-endian
-  // Build payload and find the input index bytes
+  // Verify the round-trip works, which confirms LE encoding is consistent
   const payload = buildOpReturnPayload(packet);
-  // The input starts after: magic(3) + type(1) + groupCount(1) + presence(1) + issuance + inputCount(1)
-  // We can verify by checking round-trip works, which confirms BE encoding is consistent
+  assert.ok(payload.length > 0, 'Payload should be non-empty');
 
-  console.log('  ✓ Big-endian index encoding passed');
+  console.log('  ✓ Little-endian index encoding passed');
 }
 
 function testSelfDelimitingTlv() {
@@ -1802,7 +1800,7 @@ async function runAllTests() {
 
     // Compact encoding edge case tests
     testVarintAmountBoundaries();
-    testBigEndianIndexEncoding();
+    testLittleEndianIndexEncoding();
     testSelfDelimitingTlv();
 
     // Indexer tests

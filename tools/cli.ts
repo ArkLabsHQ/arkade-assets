@@ -4,7 +4,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildTxFromPayload, Tx } from './make-opreturn';
-import { Packet } from './arkade-assets-codec';
+import { Packet, TeleportWitness } from './arkade-assets-codec';
 import {
   exampleA,
   exampleB,
@@ -36,6 +36,11 @@ function handleMakeTx(args: { [key: string]: any }): void {
 
   if (args.example) {
     const commitmentHex = (args.commitment as string) || 'ab'.repeat(32);
+    // Default witness for teleport claim examples
+    const defaultWitness: TeleportWitness = {
+      paymentScript: '51', // OP_TRUE
+      nonce: 'cc'.repeat(16), // 16-byte nonce
+    };
     switch (args.example.toUpperCase()) {
       case 'A':
         tx = exampleA(txidHex);
@@ -65,7 +70,7 @@ function handleMakeTx(args: { [key: string]: any }): void {
         tx = exampleJ_teleport_commit(txidHex, commitmentHex);
         break;
       case 'K':
-        tx = exampleK_teleport_claim(txidHex, commitmentHex);
+        tx = exampleK_teleport_claim(txidHex, defaultWitness);
         break;
       case 'L':
         tx = exampleL_multi_asset_per_tx(txidHex);
