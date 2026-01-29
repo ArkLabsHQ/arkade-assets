@@ -1,5 +1,7 @@
 # Arkade Asset Transaction Examples
 
+> **Note:** Amount fields use varint encoding. Small values (0-252) use 1 byte, large values use more. The TypeScript codec handles this automatically.
+
 ---
 
 ## A) Fresh Issuance with Pre-existing Control

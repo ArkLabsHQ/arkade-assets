@@ -79,18 +79,14 @@ export interface AssetInputLocal {
   amt: string | bigint;
 }
 
-export interface TeleportWitness {
-  paymentScript: string;  // hex
-  nonce: string;          // hex
-}
-
-export interface AssetInputTeleport {
-  type: 'TELEPORT';
+export interface AssetInputIntent {
+  type: 'INTENT';
+  txid: string;  // hex, 32 bytes - intent transaction id
+  o: number;     // output index in intent transaction
   amt: string | bigint;
-  witness: TeleportWitness;  // Required - commitment derived as sha256(paymentScript || nonce)
 }
 
-export type AssetInput = AssetInputLocal | AssetInputTeleport;
+export type AssetInput = AssetInputLocal | AssetInputIntent;
 
 export interface AssetOutputLocal {
   type: 'LOCAL';
@@ -98,13 +94,7 @@ export interface AssetOutputLocal {
   amt: string | bigint;
 }
 
-export interface AssetOutputTeleport {
-  type: 'TELEPORT';
-  commitment: string;
-  amt: string | bigint;
-}
-
-export type AssetOutput = AssetOutputLocal | AssetOutputTeleport;
+export type AssetOutput = AssetOutputLocal;
 
 export interface Issuance {
   controlAsset?: AssetRef;
@@ -124,20 +114,10 @@ export interface Packet {
   groups?: Group[];
 }
 
-export interface Fungible {
-  commitment: string;
-  amt: bigint;
-}
-
-export interface Nft {
-  commitment: string;
-  amt: bigint;
-}
-
 // ----------------- CONFIG -----------------
 
 export const Config: ConfigType = {
-  u16LE: true,
+  u16LE: true,   // Little-endian for u16 fields (matches Bitcoin style)
   u64LE: true,
   txidLE: false,
   varuint: 'compactsize',
@@ -224,6 +204,27 @@ function encodeCompactSize(n: number): Uint8Array {
   return concatBytes(new Uint8Array([0xff]), writeU64(n, true));
 }
 
+function encodeCompactSizeBigInt(n: bigint): Uint8Array {
+  if (n < 0n) throw new Error('Amount must be >= 0');
+  if (n < 0xfdn) return new Uint8Array([Number(n)]);
+  if (n <= 0xffffn) {
+    const buf = new Uint8Array(3);
+    buf[0] = 0xfd;
+    new DataView(buf.buffer).setUint16(1, Number(n), true);
+    return buf;
+  }
+  if (n <= 0xffffffffn) {
+    const buf = new Uint8Array(5);
+    buf[0] = 0xfe;
+    new DataView(buf.buffer).setUint32(1, Number(n), true);
+    return buf;
+  }
+  const buf = new Uint8Array(9);
+  buf[0] = 0xff;
+  new DataView(buf.buffer).setBigUint64(1, n, true);
+  return buf;
+}
+
 function decodeCompactSize(buf: Uint8Array, off: number): { value: number; size: number } {
   if (off >= buf.length) throw new Error('decodeCompactSize OOB');
   const ch = buf[off];
@@ -240,6 +241,25 @@ function decodeCompactSize(buf: Uint8Array, off: number): { value: number; size:
   const v = readU64(new DataView(buf.buffer, buf.byteOffset + off + 1, 8), 0, true);
   if (v > Number.MAX_SAFE_INTEGER) throw new Error('compactsize 0xff value too large for Number');
   return { value: Number(v), size: 9 };
+}
+
+function decodeCompactSizeBigInt(buf: Uint8Array, off: number): { value: bigint; size: number } {
+  if (off >= buf.length) throw new Error('decodeCompactSizeBigInt OOB');
+  const ch = buf[off];
+  if (ch < 0xfd) return { value: BigInt(ch), size: 1 };
+  if (ch === 0xfd) {
+    if (off + 3 > buf.length) throw new Error('decodeCompactSizeBigInt 0xfd OOB');
+    const val = new DataView(buf.buffer, buf.byteOffset + off + 1, 2).getUint16(0, true);
+    return { value: BigInt(val), size: 3 };
+  }
+  if (ch === 0xfe) {
+    if (off + 5 > buf.length) throw new Error('decodeCompactSizeBigInt 0xfe OOB');
+    const val = new DataView(buf.buffer, buf.byteOffset + off + 1, 4).getUint32(0, true);
+    return { value: BigInt(val), size: 5 };
+  }
+  if (off + 9 > buf.length) throw new Error('decodeCompactSizeBigInt 0xff OOB');
+  const val = new DataView(buf.buffer, buf.byteOffset + off + 1, 8).getBigUint64(0, true);
+  return { value: val, size: 9 };
 }
 
 function encodeVarUint(n: number): Uint8Array {
@@ -333,87 +353,30 @@ export function encodeMetadataMap(map: MetadataMap): Uint8Array {
   return concatBytes(...bufs);
 }
 
-/**
- * Encodes a TeleportWitness in length-prefixed format:
- * varint(script_len) || payment_script || varint(nonce_len) || nonce
- */
-export function encodeTeleportWitness(witness: TeleportWitness): Uint8Array {
-  const scriptBytes = hexToBytes(witness.paymentScript);
-  const nonceBytes = hexToBytes(witness.nonce);
-
-  if (nonceBytes.length > 32) {
-    throw new Error('Teleport nonce must be at most 32 bytes');
-  }
-
-  return concatBytes(
-    encodeVarUint(scriptBytes.length),
-    scriptBytes,
-    encodeVarUint(nonceBytes.length),
-    nonceBytes
-  );
-}
-
-/**
- * Decodes a TeleportWitness from length-prefixed format.
- */
-export function decodeTeleportWitness(buf: Uint8Array, off: number): { witness: TeleportWitness; next: number } {
-  let cursor = off;
-
-  // Decode script length and script
-  const scriptLen = decodeVarUint(buf, cursor);
-  cursor += scriptLen.size;
-  const scriptBytes = buf.slice(cursor, cursor + scriptLen.value);
-  cursor += scriptLen.value;
-
-  // Decode nonce length and nonce
-  const nonceLen = decodeVarUint(buf, cursor);
-  cursor += nonceLen.size;
-  const nonceBytes = buf.slice(cursor, cursor + nonceLen.value);
-  cursor += nonceLen.value;
-
-  return {
-    witness: {
-      paymentScript: bytesToHex(scriptBytes),
-      nonce: bytesToHex(nonceBytes)
-    },
-    next: cursor
-  };
-}
-
 function encodeAssetInput(input: AssetInput): Uint8Array {
   if (input.type === 'LOCAL') {
-    const buf = new Uint8Array(11);
-    buf[0] = 0x01;
-    new DataView(buf.buffer).setUint16(1, input.i, true);
-    new DataView(buf.buffer).setBigUint64(3, BigInt(input.amt), true);
-    return buf;
-  } else if (input.type === 'TELEPORT') {
-    // Format: type(1) + amt(8) + witness(variable)
-    // Commitment is derived from witness as sha256(paymentScript || nonce)
-    const baseBuf = new Uint8Array(9);
-    baseBuf[0] = 0x02;
-    new DataView(baseBuf.buffer).setBigUint64(1, BigInt(input.amt), true);
-    const witnessBuf = encodeTeleportWitness(input.witness);
-    return concatBytes(baseBuf, witnessBuf);
+    // Format: type(1) + index(2, LE) + varint(amt)
+    const typeBuf = new Uint8Array([0x01]);
+    const indexBuf = writeU16(input.i, Config.u16LE);
+    const amtBuf = encodeCompactSizeBigInt(BigInt(input.amt));
+    return concatBytes(typeBuf, indexBuf, amtBuf);
+  } else if (input.type === 'INTENT') {
+    // Format: type(1) + txid(32) + o(2, LE) + varint(amt)
+    const typeBuf = new Uint8Array([0x02]);
+    const txidBuf = hexToBytes(input.txid);
+    const indexBuf = writeU16(input.o, Config.u16LE);
+    const amtBuf = encodeCompactSizeBigInt(BigInt(input.amt));
+    return concatBytes(typeBuf, txidBuf, indexBuf, amtBuf);
   }
   throw new Error(`Unknown input type: ${(input as any).type}`);
 }
 
 function encodeAssetOutput(output: AssetOutput): Uint8Array {
-  if (output.type === 'LOCAL') {
-    const buf = new Uint8Array(11);
-    buf[0] = 0x01;
-    new DataView(buf.buffer).setUint16(1, output.o, true);
-    new DataView(buf.buffer).setBigUint64(3, BigInt(output.amt), true);
-    return buf;
-  } else if (output.type === 'TELEPORT') {
-    const buf = new Uint8Array(41);
-    buf[0] = 0x02;
-    buf.set(hexToBytes(output.commitment), 1);
-    new DataView(buf.buffer).setBigUint64(33, BigInt(output.amt), true);
-    return buf;
-  }
-  throw new Error(`Unknown output type: ${(output as any).type}`);
+  // Only LOCAL outputs now - format: type(1) + index(2, LE) + varint(amt)
+  const typeBuf = new Uint8Array([0x01]);
+  const indexBuf = writeU16(output.o, Config.u16LE);
+  const amtBuf = encodeCompactSizeBigInt(BigInt(output.amt));
+  return concatBytes(typeBuf, indexBuf, amtBuf);
 }
 
 export function encodeIssuance(issuance: Issuance): Uint8Array {
@@ -442,9 +405,12 @@ export function encodeGroup(group: Group): Uint8Array {
   } else {
     throw new Error('Implement your canonical TLV tagging here.');
   }
+
+  // Input/output counts as separate varints
   byteList.push(encodeVarUint(group.inputs.length));
-  for (const inp of group.inputs) byteList.push(encodeAssetInput(inp));
   byteList.push(encodeVarUint(group.outputs.length));
+
+  for (const inp of group.inputs) byteList.push(encodeAssetInput(inp));
   for (const out of group.outputs) byteList.push(encodeAssetOutput(out));
   return concatBytes(...byteList);
 }
@@ -459,8 +425,8 @@ export function encodePacket(packet: Packet): Uint8Array {
 export function buildOpReturnPayload(packet: Packet): Uint8Array {
   const magic = hexToBytes('41524b'); // "ARK"
   const assetPayload = encodePacket(packet);
-  const tlvStream = encodeTlv(0x00, assetPayload);
-  return concatBytes(magic, tlvStream);
+  // Type 0x00 is self-delimiting (no length field)
+  return concatBytes(magic, new Uint8Array([0x00]), assetPayload);
 }
 
 export function buildOpReturnScript(packet: Packet): Uint8Array {
@@ -476,11 +442,19 @@ function decodeTlvStream(buf: Uint8Array, off: number): { records: { type: numbe
   while (cursor < buf.length) {
     const type = buf[cursor];
     cursor += 1;
-    const lenResult = decodeCompactSize(buf, cursor);
-    cursor += lenResult.size;
-    const value = buf.slice(cursor, cursor + lenResult.value);
-    cursor += lenResult.value;
-    records.push({ type, value });
+    if (type <= 0x3f) {
+      // Self-delimiting: rest of buffer is the payload
+      const value = buf.slice(cursor);
+      cursor = buf.length;
+      records.push({ type, value });
+    } else {
+      // 0x40-0xFF: length-prefixed
+      const lenResult = decodeCompactSize(buf, cursor);
+      cursor += lenResult.size;
+      const value = buf.slice(cursor, cursor + lenResult.value);
+      cursor += lenResult.value;
+      records.push({ type, value });
+    }
   }
   return { records, next: cursor };
 }
@@ -525,57 +499,38 @@ export function decodeAssetRef(buf: Uint8Array, off: number): { ref: AssetRef; n
   throw new Error('Unknown AssetRef tag: ' + tag);
 }
 
-export function decodeFungible(buf: Uint8Array, off: number): { fungible: Fungible; next: number } {
-  if (off + 41 > buf.length) throw new Error('decodeFungible OOB');
-  const commitment = bytesToHex(buf.slice(off + 1, off + 33));
-  const view = new DataView(buf.buffer, buf.byteOffset + off);
-  const amt = view.getBigUint64(33, Config.u64LE);
-  return { fungible: { commitment, amt }, next: off + 41 };
-}
-
-export function decodeNft(buf: Uint8Array, off: number): { nft: Nft; next: number } {
-  if (off + 41 > buf.length) throw new Error('decodeNft OOB');
-  const commitment = bytesToHex(buf.slice(off + 1, off + 33));
-  const view = new DataView(buf.buffer, buf.byteOffset + off);
-  const amt = view.getBigUint64(33, Config.u64LE);
-  return { nft: { commitment, amt }, next: off + 41 };
-}
-
 function decodeAssetInput(buf: Uint8Array, off: number): { input: AssetInput; next: number } {
   if (off >= buf.length) throw new Error('decodeAssetInput OOB');
   const inputType = buf[off];
   if (inputType === 0x01) { // LOCAL
-    if (off + 11 > buf.length) throw new Error('decodeAssetInput LOCAL OOB');
-    const view = new DataView(buf.buffer, buf.byteOffset + off, 11);
+    if (off + 3 > buf.length) throw new Error('decodeAssetInput LOCAL OOB');
+    const view = new DataView(buf.buffer, buf.byteOffset + off, 3);
     const i = view.getUint16(1, Config.u16LE);
-    const amt = view.getBigUint64(3, Config.u64LE);
-    return { input: { type: 'LOCAL', i, amt: amt.toString() }, next: off + 11 };
-  } else if (inputType === 0x02) { // TELEPORT
-    // Format: type(1) + amt(8) + witness(variable)
-    if (off + 9 > buf.length) throw new Error('decodeAssetInput TELEPORT OOB');
-    const view = new DataView(buf.buffer, buf.byteOffset + off);
-    const amt = view.getBigUint64(1, Config.u64LE);
-    const { witness, next } = decodeTeleportWitness(buf, off + 9);
-    return { input: { type: 'TELEPORT', amt: amt.toString(), witness }, next };
+    const amtResult = decodeCompactSizeBigInt(buf, off + 3);
+    return { input: { type: 'LOCAL', i, amt: amtResult.value.toString() }, next: off + 3 + amtResult.size };
+  } else if (inputType === 0x02) { // INTENT
+    // Format: type(1) + txid(32) + o(2, LE) + varint(amt)
+    if (off + 35 > buf.length) throw new Error('decodeAssetInput INTENT OOB');
+    const txid = bytesToHex(buf.slice(off + 1, off + 33));
+    const view = new DataView(buf.buffer, buf.byteOffset + off + 33, 2);
+    const o = view.getUint16(0, Config.u16LE);
+    const amtResult = decodeCompactSizeBigInt(buf, off + 35);
+    return { input: { type: 'INTENT', txid, o, amt: amtResult.value.toString() }, next: off + 35 + amtResult.size };
   }
   throw new Error(`Unknown input type: ${inputType}`);
 }
 
 function decodeAssetOutput(buf: Uint8Array, off: number): { output: AssetOutput; next: number } {
+  // Only LOCAL outputs - format: type(1) + index(2, LE) + varint(amt)
+  // Note: We still read the type byte for forward compatibility
   if (off >= buf.length) throw new Error('decodeAssetOutput OOB');
   const outputType = buf[off];
   if (outputType === 0x01) { // LOCAL
-    if (off + 11 > buf.length) throw new Error('decodeAssetOutput LOCAL OOB');
-    const view = new DataView(buf.buffer, buf.byteOffset + off, 11);
+    if (off + 3 > buf.length) throw new Error('decodeAssetOutput LOCAL OOB');
+    const view = new DataView(buf.buffer, buf.byteOffset + off, 3);
     const o = view.getUint16(1, Config.u16LE);
-    const amt = view.getBigUint64(3, Config.u64LE);
-    return { output: { type: 'LOCAL', o, amt: amt.toString() }, next: off + 11 };
-  } else if (outputType === 0x02) { // TELEPORT
-    if (off + 41 > buf.length) throw new Error('decodeAssetOutput TELEPORT OOB');
-    const commitment = bytesToHex(buf.slice(off + 1, off + 33));
-    const view = new DataView(buf.buffer, buf.byteOffset + off);
-    const amt = view.getBigUint64(33, Config.u64LE);
-    return { output: { type: 'TELEPORT', commitment, amt: amt.toString() }, next: off + 41 };
+    const amtResult = decodeCompactSizeBigInt(buf, off + 3);
+    return { output: { type: 'LOCAL', o, amt: amtResult.value.toString() }, next: off + 3 + amtResult.size };
   }
   throw new Error(`Unknown output type: ${outputType}`);
 }
@@ -601,13 +556,16 @@ export function decodeGroup(buf: Uint8Array, off: number): { group: Group; next:
   if (presence & 2) { const r = decodeIssuance(buf, cursor); group.issuance = r.issuance; cursor = r.next; }
   if (presence & 4) { const r = decodeMetadataMap(buf, cursor); group.metadata = r.map; cursor = r.next; }
 
-  const vin = decodeVarUint(buf, cursor);
-  cursor += vin.size;
-  for (let k = 0; k < vin.value; k++) { const r = decodeAssetInput(buf, cursor); group.inputs.push(r.input); cursor = r.next; }
+  // Decode input/output counts as separate varints
+  const vinCount = decodeVarUint(buf, cursor);
+  cursor += vinCount.size;
+  const inCount = vinCount.value;
+  const voutCount = decodeVarUint(buf, cursor);
+  cursor += voutCount.size;
+  const outCount = voutCount.value;
 
-  const vout = decodeVarUint(buf, cursor);
-  cursor += vout.size;
-  for (let k = 0; k < vout.value; k++) { const r = decodeAssetOutput(buf, cursor); group.outputs.push(r.output); cursor = r.next; }
+  for (let k = 0; k < inCount; k++) { const r = decodeAssetInput(buf, cursor); group.inputs.push(r.input); cursor = r.next; }
+  for (let k = 0; k < outCount; k++) { const r = decodeAssetOutput(buf, cursor); group.outputs.push(r.output); cursor = r.next; }
 
   return { group, next: cursor };
 }
@@ -741,53 +699,3 @@ export function computeMetadataMerkleRootHex(metadata: MetadataMap): string {
   return bytesToHex(computeMetadataMerkleRoot(metadata));
 }
 
-// ----------------- TELEPORT COMMITMENT -----------------
-
-/**
- * Computes a teleport commitment hash.
- * commitment = sha256(payment_script || nonce)
- * @param paymentScript - The payment script as bytes
- * @param nonce - Nonce (up to 32 bytes)
- */
-export function computeTeleportCommitment(paymentScript: Uint8Array, nonce: Uint8Array): Uint8Array {
-  if (nonce.length > 32) {
-    throw new Error('Teleport nonce must be at most 32 bytes');
-  }
-  return sha256Sync(concatBytes(paymentScript, nonce));
-}
-
-/**
- * Computes a teleport commitment and returns it as a hex string.
- */
-export function computeTeleportCommitmentHex(paymentScript: Uint8Array, nonce: Uint8Array): string {
-  return bytesToHex(computeTeleportCommitment(paymentScript, nonce));
-}
-
-/**
- * Verifies a teleport commitment against the provided preimage.
- */
-export function verifyTeleportCommitment(
-  commitment: Uint8Array,
-  paymentScript: Uint8Array,
-  nonce: Uint8Array
-): boolean {
-  const computed = computeTeleportCommitment(paymentScript, nonce);
-  return bytesEqual(commitment, computed);
-}
-
-/**
- * Gets the commitment hash from a TeleportWitness.
- * commitment = sha256(paymentScript || nonce)
- */
-export function getWitnessCommitment(witness: TeleportWitness): string {
-  const scriptBytes = hexToBytes(witness.paymentScript);
-  const nonceBytes = hexToBytes(witness.nonce);
-  return computeTeleportCommitmentHex(scriptBytes, nonceBytes);
-}
-
-/**
- * Gets the commitment hash from a TELEPORT input.
- */
-export function getTeleportInputCommitment(input: AssetInputTeleport): string {
-  return getWitnessCommitment(input.witness);
-}

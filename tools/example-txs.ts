@@ -1,7 +1,7 @@
 // tools/example-txs.ts
 // Example transactions for Arkade Asset V1.
 
-import { buildOpReturnScript, bufToHex, Packet, TeleportWitness } from './arkade-assets-codec';
+import { buildOpReturnScript, bufToHex, Packet } from './arkade-assets-codec';
 
 interface TxVout {
   n: number;
@@ -382,68 +382,6 @@ export function exampleI_multi_asset_per_utxo(txidHex: string): Tx {
       { n: 0, scriptPubKey: '51' }, // Asset X output
       { n: 1, scriptPubKey: '51' }, // Asset Y output
       { n: 2, scriptPubKey: scriptHex },
-    ],
-  };
-}
-
-// ==================== TELEPORT COMMIT ====================
-
-export function exampleJ_teleport_commit(txidHex: string, commitmentHex: string): Tx {
-  // Example J: Teleport commit - send tokens to a teleport output
-  const tokenAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
-
-  const groups: Packet['groups'] = [
-    {
-      assetId: tokenAssetId,
-      inputs: [{ type: 'LOCAL' as const, i: 0, amt: 100n }],
-      outputs: [
-        { type: 'TELEPORT' as const, commitment: commitmentHex, amt: 100n },
-      ],
-    },
-  ];
-
-  const script = buildOpReturnScript({ groups });
-  const scriptHex = bufToHex(script);
-
-  return {
-    txid: txidHex,
-    vin: [
-      { txid: tokenAssetId.txidHex, vout: 0 },
-    ],
-    vout: [
-      { n: 0, scriptPubKey: scriptHex }, // Only OP_RETURN (no LOCAL outputs)
-    ],
-  };
-}
-
-// ==================== TELEPORT CLAIM ====================
-
-export function exampleK_teleport_claim(txidHex: string, witness: TeleportWitness): Tx {
-  // Example K: Teleport claim - claim tokens from a teleport commitment
-  // Commitment is derived from witness as sha256(paymentScript || nonce)
-  const tokenAssetId = { txidHex: 'dd'.repeat(32), gidx: 0 };
-
-  const groups: Packet['groups'] = [
-    {
-      assetId: tokenAssetId,
-      inputs: [
-        { type: 'TELEPORT' as const, amt: 100n, witness },
-      ],
-      outputs: [
-        { type: 'LOCAL' as const, o: 0, amt: 100n },
-      ],
-    },
-  ];
-
-  const script = buildOpReturnScript({ groups });
-  const scriptHex = bufToHex(script);
-
-  return {
-    txid: txidHex,
-    vin: [], // No Bitcoin inputs needed for teleport claim (in Arkade context)
-    vout: [
-      { n: 0, scriptPubKey: '51' }, // Token output
-      { n: 1, scriptPubKey: scriptHex },
     ],
   };
 }
