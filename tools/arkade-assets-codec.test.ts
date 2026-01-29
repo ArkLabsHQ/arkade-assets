@@ -6,13 +6,7 @@ import {
   buildOpReturnPayload,
   Config,
   computeMetadataMerkleRootHex,
-  computeTeleportCommitmentHex,
-  verifyTeleportCommitment,
   hexToBytes,
-  encodeTeleportWitness,
-  decodeTeleportWitness,
-  TeleportWitness,
-  getWitnessCommitment,
 } from './arkade-assets-codec';
 import { Indexer, State, Storage } from './indexer';
 import {
@@ -24,8 +18,6 @@ import {
   exampleG_burn,
   exampleH_reissuance,
   exampleI_multi_asset_per_utxo,
-  exampleJ_teleport_commit,
-  exampleK_teleport_claim,
   exampleL_multi_asset_per_tx,
 } from './example-txs';
 
@@ -36,7 +28,7 @@ class InMemoryStorage implements Storage {
   private snapshots: Map<number, State> = new Map();
 
   constructor() {
-    this.state = { assets: {}, utxos: {}, transactions: {}, pendingTeleports: {}, blockHeight: -1 };
+    this.state = { assets: {}, utxos: {}, transactions: {}, blockHeight: -1 };
   }
 
   load(height?: number): void {
@@ -46,7 +38,7 @@ class InMemoryStorage implements Storage {
       height = heights.length > 0 ? Math.max(...heights) : -1;
     }
     if (height === -1) {
-      this.state = { assets: {}, utxos: {}, transactions: {}, pendingTeleports: {}, blockHeight: -1 };
+      this.state = { assets: {}, utxos: {}, transactions: {}, blockHeight: -1 };
     } else {
       const snapshot = this.snapshots.get(height);
       if (!snapshot) throw new Error(`No snapshot at height ${height}`);
@@ -110,43 +102,6 @@ function testCodecRoundTrip() {
   console.log('  ✓ Codec round-trip passed');
 }
 
-function testTeleportCodec() {
-  console.log('Testing teleport encoding/decoding...');
-
-  const witness: TeleportWitness = {
-    paymentScript: '76a914' + 'ab'.repeat(20) + '88ac',
-    nonce: 'cc'.repeat(32)
-  };
-  const commitmentHex = getWitnessCommitment(witness);
-
-  const packet: Packet = {
-    groups: [
-      {
-        assetId: { txidHex: 'dd'.repeat(32), gidx: 0 },
-        inputs: [{ type: 'TELEPORT', amt: 100n, witness }],
-        outputs: [{ type: 'TELEPORT', commitment: commitmentHex, amt: 100n }],
-      },
-    ],
-  };
-
-  const script = buildOpReturnScript(packet);
-  const decoded = parseOpReturnScript(script);
-
-  assert.ok(decoded, 'Failed to decode teleport packet');
-  assert.strictEqual(decoded.groups?.length, 1, 'Expected 1 group');
-
-  const inp = decoded.groups![0].inputs[0];
-  assert.strictEqual(inp.type, 'TELEPORT', 'Expected TELEPORT input');
-  if (inp.type === 'TELEPORT') {
-    assert.strictEqual(inp.witness.paymentScript, witness.paymentScript, 'Witness script mismatch');
-    assert.strictEqual(inp.witness.nonce, witness.nonce, 'Witness nonce mismatch');
-    // Verify derived commitment
-    assert.strictEqual(getWitnessCommitment(inp.witness), commitmentHex, 'Derived commitment mismatch');
-  }
-
-  console.log('  ✓ Teleport encoding/decoding passed');
-}
-
 // ----------------- METADATA MERKLE TESTS -----------------
 
 function testMetadataMerkleHash() {
@@ -165,28 +120,6 @@ function testMetadataMerkleHash() {
   assert.notStrictEqual(hash1, hash3, 'Different metadata should produce different hash');
 
   console.log('  ✓ Metadata Merkle hash passed');
-}
-
-// ----------------- TELEPORT COMMITMENT TESTS -----------------
-
-function testTeleportCommitment() {
-  console.log('Testing teleport commitment...');
-
-  const paymentScript = hexToBytes('76a914' + 'ab'.repeat(20) + '88ac');
-  const nonce = hexToBytes('cc'.repeat(32));
-
-  const commitment = computeTeleportCommitmentHex(paymentScript, nonce);
-  assert.strictEqual(commitment.length, 64, 'Commitment should be 64 hex chars');
-
-  // Verify should return true for correct preimage
-  const commitmentBytes = hexToBytes(commitment);
-  assert.ok(verifyTeleportCommitment(commitmentBytes, paymentScript, nonce), 'Verification should pass');
-
-  // Verify should fail for wrong nonce
-  const wrongNonce = hexToBytes('dd'.repeat(32));
-  assert.ok(!verifyTeleportCommitment(commitmentBytes, paymentScript, wrongNonce), 'Verification should fail with wrong nonce');
-
-  console.log('  ✓ Teleport commitment passed');
 }
 
 // ----------------- INDEXER TESTS -----------------
@@ -295,46 +228,6 @@ function testIndexerImmutableMetadata() {
   assert.ok(result.error?.includes('immutable'), 'Error should mention immutable');
 
   console.log('  ✓ Immutable metadata enforcement passed');
-}
-
-function testIndexerTeleportFlow() {
-  console.log('Testing indexer: teleport commit/claim flow...');
-
-  const storage = new InMemoryStorage();
-  const indexer = new Indexer(storage);
-
-  // Set up initial token
-  const tokenAssetId = 'dd'.repeat(32) + ':0';
-  storage.state.utxos[`${'dd'.repeat(32)}:0`] = { [tokenAssetId]: '100' };
-  storage.state.assets[tokenAssetId] = { control: null, metadata: {}, immutable: false };
-
-  // Create witness and derive commitment
-  const witness: TeleportWitness = {
-    paymentScript: '76a914' + 'ab'.repeat(20) + '88ac',
-    nonce: 'cc'.repeat(32)
-  };
-  const commitmentHex = getWitnessCommitment(witness);
-
-  // Step 1: Commit
-  const commitTx = exampleJ_teleport_commit('c1'.repeat(32), commitmentHex);
-  const commitResult = indexer.applyToArkadeVirtualMempool(commitTx);
-  assert.ok(commitResult.success, `Commit failed: ${commitResult.error}`);
-
-  let specState = indexer.getSpeculativeState();
-  assert.ok(specState.pendingTeleports[commitmentHex], 'Pending teleport should exist');
-  assert.strictEqual(specState.pendingTeleports[commitmentHex].amount, '100');
-
-  // Step 2: Claim with witness (commitment derived from witness)
-  // For Arkade-native teleports, confirmations aren't required
-  const claimTx = exampleK_teleport_claim('c2'.repeat(32), witness);
-  const claimResult = indexer.applyToArkadeVirtualMempool(claimTx);
-  assert.ok(claimResult.success, `Claim failed: ${claimResult.error}`);
-
-  specState = indexer.getSpeculativeState();
-  assert.ok(!specState.pendingTeleports[commitmentHex], 'Pending teleport should be consumed');
-  assert.strictEqual(specState.utxos[`${'c2'.repeat(32)}:0`]?.[tokenAssetId], '100');
-
-  console.log('  ✓ Teleport commit/claim flow passed');
 }
 
 function testIndexerValidationOutputBounds() {
@@ -502,55 +395,6 @@ function testForwardReferenceByGroup() {
   console.log('  ✓ Forward reference (BY_GROUP) for control assets passed');
 }
 
-// ----------------- TELEPORT WITNESS TESTS -----------------
-
-function testTeleportWitnessEncoding() {
-  console.log('Testing teleport witness encoding/decoding...');
-
-  const witness: TeleportWitness = {
-    paymentScript: '76a914' + 'ab'.repeat(20) + '88ac',  // P2PKH script
-    nonce: 'cc'.repeat(32)
-  };
-
-  const encoded = encodeTeleportWitness(witness);
-  const { witness: decoded, next } = decodeTeleportWitness(encoded, 0);
-
-  assert.strictEqual(decoded.paymentScript, witness.paymentScript, 'Payment script mismatch');
-  assert.strictEqual(decoded.nonce, witness.nonce, 'Nonce mismatch');
-  assert.strictEqual(next, encoded.length, 'Next offset should equal encoded length');
-
-  console.log('  ✓ Teleport witness encoding/decoding passed');
-}
-
-function testVariableNonceSize() {
-  console.log('Testing variable nonce size...');
-
-  // Test with 16-byte nonce (should work)
-  const paymentScript = hexToBytes('76a914' + 'ab'.repeat(20) + '88ac');
-  const shortNonce = hexToBytes('dd'.repeat(16));
-  const commitment16 = computeTeleportCommitmentHex(paymentScript, shortNonce);
-  assert.strictEqual(commitment16.length, 64, 'Commitment should be 64 hex chars');
-
-  // Test with 32-byte nonce (should work)
-  const fullNonce = hexToBytes('ee'.repeat(32));
-  const commitment32 = computeTeleportCommitmentHex(paymentScript, fullNonce);
-  assert.strictEqual(commitment32.length, 64, 'Commitment should be 64 hex chars');
-
-  // Different nonce sizes should produce different commitments
-  assert.notStrictEqual(commitment16, commitment32, 'Different nonces should produce different commitments');
-
-  // Test with 33-byte nonce (should fail)
-  const tooLongNonce = hexToBytes('ff'.repeat(33));
-  try {
-    computeTeleportCommitmentHex(paymentScript, tooLongNonce);
-    assert.fail('Should reject nonce > 32 bytes');
-  } catch (e: any) {
-    assert.ok(e.message.includes('32 bytes'), 'Error should mention 32 bytes limit');
-  }
-
-  console.log('  ✓ Variable nonce size passed');
-}
-
 function testMultipleOpReturnHandling() {
   console.log('Testing multiple OP_RETURN handling (uses first)...');
 
@@ -599,43 +443,6 @@ function testMultipleOpReturnHandling() {
   assert.strictEqual(specState.assets[newAssetKey].metadata?.name, 'First', 'Should use first packet metadata');
 
   console.log('  ✓ Multiple OP_RETURN handling passed');
-}
-
-function testTeleportWithWitness() {
-  console.log('Testing teleport codec with witness...');
-
-  const witness: TeleportWitness = {
-    paymentScript: '76a914' + 'bb'.repeat(20) + '88ac',
-    nonce: 'cc'.repeat(32)
-  };
-  const expectedCommitment = getWitnessCommitment(witness);
-
-  const packet: Packet = {
-    groups: [
-      {
-        assetId: { txidHex: 'dd'.repeat(32), gidx: 0 },
-        inputs: [{ type: 'TELEPORT', amt: 100n, witness }],
-        outputs: [{ type: 'LOCAL', o: 0, amt: 100n }],
-      },
-    ],
-  };
-
-  const script = buildOpReturnScript(packet);
-  const decoded = parseOpReturnScript(script);
-
-  assert.ok(decoded, 'Failed to decode teleport packet with witness');
-  assert.strictEqual(decoded.groups?.length, 1, 'Expected 1 group');
-
-  const inp = decoded.groups![0].inputs[0];
-  assert.strictEqual(inp.type, 'TELEPORT', 'Expected TELEPORT input');
-  if (inp.type === 'TELEPORT') {
-    assert.strictEqual(inp.witness.paymentScript, witness.paymentScript, 'Witness script mismatch');
-    assert.strictEqual(inp.witness.nonce, witness.nonce, 'Witness nonce mismatch');
-    // Verify commitment is correctly derived
-    assert.strictEqual(getWitnessCommitment(inp.witness), expectedCommitment, 'Derived commitment mismatch');
-  }
-
-  console.log('  ✓ Teleport with witness passed');
 }
 
 // ----------------- VALIDATION TESTS -----------------
@@ -1010,175 +817,6 @@ function testMultiAssetPerUtxo() {
   assert.strictEqual(specState.utxos[utxoKey]?.[assetB], '200', 'Asset B should be in output');
 
   console.log('  ✓ Multi-asset per UTXO passed');
-}
-
-function testTeleportWrongPaymentScript() {
-  console.log('Testing teleport claim with wrong payment script...');
-
-  const storage = new InMemoryStorage();
-  const indexer = new Indexer(storage);
-
-  // Set up token and create a pending teleport with specific payment script
-  const tokenAssetId = 'dd'.repeat(32) + ':0';
-  storage.state.assets[tokenAssetId] = { control: null, metadata: {}, immutable: false };
-
-  // Create pending teleport
-  const correctWitness: TeleportWitness = {
-    paymentScript: '76a914' + 'aa'.repeat(20) + '88ac',  // Correct script
-    nonce: 'cc'.repeat(32)
-  };
-  const commitment = getWitnessCommitment(correctWitness);
-  storage.state.pendingTeleports[commitment] = {
-    assetId: { txidHex: 'dd'.repeat(32), gidx: 0 },
-    amount: '100',
-    sourceTxid: 'src'.repeat(16),
-    sourceHeight: undefined  // Arkade-native, no confirmation needed
-  };
-
-  // Try to claim with wrong payment script
-  const wrongWitness: TeleportWitness = {
-    paymentScript: '76a914' + 'bb'.repeat(20) + '88ac',  // Different script!
-    nonce: 'cc'.repeat(32)
-  };
-
-  const packet: Packet = {
-    groups: [{
-      assetId: { txidHex: 'dd'.repeat(32), gidx: 0 },
-      inputs: [{ type: 'TELEPORT' as const, amt: 100n, witness: wrongWitness }],
-      outputs: [{ type: 'LOCAL' as const, o: 0, amt: 100n }],
-    }],
-  };
-
-  const script = buildOpReturnScript(packet);
-  const tx = {
-    txid: 'babe'.repeat(16),
-    vin: [],
-    vout: [
-      { n: 0, scriptPubKey: '51' },
-      { n: 1, scriptPubKey: Buffer.from(script).toString('hex') },
-    ],
-  };
-
-  const result = indexer.applyToArkadeVirtualMempool(tx as any);
-  assert.ok(!result.success, 'Wrong payment script should fail');
-  assert.ok(result.error?.includes('not found'), `Error should mention not found: ${result.error}`);
-
-  console.log('  ✓ Teleport wrong payment script passed');
-}
-
-function testTeleportConfirmationDelay() {
-  console.log('Testing teleport confirmation delay for on-chain source...');
-
-  const storage = new InMemoryStorage();
-  const indexer = new Indexer(storage);
-
-  // Set up token and create an on-chain pending teleport
-  const tokenAssetId = 'dd'.repeat(32) + ':0';
-  storage.state.assets[tokenAssetId] = { control: null, metadata: {}, immutable: false };
-  storage.state.blockHeight = 99;  // Current block is 99
-
-  const witness: TeleportWitness = {
-    paymentScript: '76a914' + 'aa'.repeat(20) + '88ac',
-    nonce: 'cc'.repeat(32)
-  };
-  const commitment = getWitnessCommitment(witness);
-
-  // On-chain teleport from block 99 (only 1 confirmation at block 100)
-  storage.state.pendingTeleports[commitment] = {
-    assetId: { txidHex: 'dd'.repeat(32), gidx: 0 },
-    amount: '100',
-    sourceTxid: 'src'.repeat(16),
-    sourceHeight: 99  // Teleport committed at block 99
-  };
-
-  const packet: Packet = {
-    groups: [{
-      assetId: { txidHex: 'dd'.repeat(32), gidx: 0 },
-      inputs: [{ type: 'TELEPORT' as const, amt: 100n, witness }],
-      outputs: [{ type: 'LOCAL' as const, o: 0, amt: 100n }],
-    }],
-  };
-
-  const script = buildOpReturnScript(packet);
-  const tx = {
-    txid: 'fade'.repeat(16),
-    vin: [],
-    vout: [
-      { n: 0, scriptPubKey: '51' },
-      { n: 1, scriptPubKey: Buffer.from(script).toString('hex') },
-    ],
-  };
-
-  // Apply at block 100 - should fail (only 1 confirmation, need 6)
-  let errorThrown = false;
-  let errorMsg = '';
-  try {
-    indexer.applyBlock({ height: 100, transactions: [tx as any] });
-  } catch (e: any) {
-    errorThrown = true;
-    errorMsg = e.message;
-  }
-  assert.ok(errorThrown, 'Should reject teleport without enough confirmations');
-  assert.ok(errorMsg.includes('confirmation'), `Error should mention confirmations: ${errorMsg}`);
-
-  console.log('  ✓ Teleport confirmation delay passed');
-}
-
-function testTeleportConfirmationSuccess() {
-  console.log('Testing teleport claim after sufficient confirmations...');
-
-  const storage = new InMemoryStorage();
-  const indexer = new Indexer(storage);
-
-  // Set up token and create an on-chain pending teleport
-  const tokenAssetId = 'dd'.repeat(32) + ':0';
-  storage.state.assets[tokenAssetId] = { control: null, metadata: {}, immutable: false };
-  storage.state.blockHeight = 105;  // Current block is 105
-
-  const witness: TeleportWitness = {
-    paymentScript: '76a914' + 'aa'.repeat(20) + '88ac',
-    nonce: 'cc'.repeat(32)
-  };
-  const commitment = getWitnessCommitment(witness);
-
-  // On-chain teleport from block 100 (6 confirmations at block 106)
-  storage.state.pendingTeleports[commitment] = {
-    assetId: { txidHex: 'dd'.repeat(32), gidx: 0 },
-    amount: '100',
-    sourceTxid: 'src'.repeat(16),
-    sourceHeight: 100
-  };
-
-  const packet: Packet = {
-    groups: [{
-      assetId: { txidHex: 'dd'.repeat(32), gidx: 0 },
-      inputs: [{ type: 'TELEPORT' as const, amt: 100n, witness }],
-      outputs: [{ type: 'LOCAL' as const, o: 0, amt: 100n }],
-    }],
-  };
-
-  const script = buildOpReturnScript(packet);
-  const tx = {
-    txid: 'conf'.repeat(16),
-    vin: [],
-    vout: [
-      { n: 0, scriptPubKey: '51' },
-      { n: 1, scriptPubKey: Buffer.from(script).toString('hex') },
-    ],
-  };
-
-  // Apply at block 106 - should succeed (6 confirmations)
-  let errorThrown = false;
-  let errorMsg = '';
-  try {
-    indexer.applyBlock({ height: 106, transactions: [tx as any] });
-  } catch (e: any) {
-    errorThrown = true;
-    errorMsg = e.message;
-  }
-  assert.ok(!errorThrown, `Should accept teleport with enough confirmations: ${errorMsg}`);
-
-  console.log('  ✓ Teleport confirmation success passed');
 }
 
 function testFreshIssuanceWithoutControl() {
@@ -1649,56 +1287,6 @@ function testReorgWithNewChain() {
   console.log('  ✓ Reorg with new chain passed');
 }
 
-function testReorgWithTeleport() {
-  console.log('Testing reorg with teleport (pending teleport handling)...');
-
-  const storage = new InMemoryStorage();
-  const indexer = new Indexer(storage);
-
-  // Set up initial state
-  const assetId = 'aa'.repeat(32) + ':0';
-  storage.state.assets[assetId] = { control: null, metadata: { name: 'Test Token' }, immutable: false };
-  storage.state.utxos[`${'aa'.repeat(32)}:0`] = { [assetId]: '1000' };
-  storage.state.blockHeight = 0;
-  storage.save(0);
-
-  // Block 1: Create a teleport commit
-  const commitment = 'cdef'.repeat(16);
-  const packet1: Packet = {
-    groups: [{
-      assetId: { txidHex: 'aa'.repeat(32), gidx: 0 },
-      inputs: [{ type: 'LOCAL' as const, i: 0, amt: 1000n }],
-      outputs: [
-        { type: 'LOCAL' as const, o: 0, amt: 500n },
-        { type: 'TELEPORT' as const, commitment, amt: 500n },
-      ],
-    }],
-  };
-  const script1 = buildOpReturnScript(packet1);
-  const tx1 = {
-    txid: 'c1c1'.repeat(16),
-    vin: [{ txid: 'aa'.repeat(32), vout: 0 }],
-    vout: [{ n: 0, scriptPubKey: '51' }, { n: 1, scriptPubKey: Buffer.from(script1).toString('hex') }],
-  };
-  indexer.applyBlock({ height: 1, transactions: [tx1 as any] });
-
-  // Verify teleport is pending
-  assert.ok(storage.state.pendingTeleports[commitment], 'Teleport should be pending');
-  assert.strictEqual(storage.state.pendingTeleports[commitment].amount, '500', 'Pending amount should be 500');
-  assert.strictEqual(storage.state.pendingTeleports[commitment].sourceHeight, 1, 'Source height should be 1');
-
-  // Rollback block 1
-  indexer.rollbackLastBlock();
-
-  // Verify state is restored (teleport should be removed)
-  assert.strictEqual(storage.state.blockHeight, 0, 'Should be at block 0');
-  assert.strictEqual(storage.state.utxos[`${'aa'.repeat(32)}:0`]?.[assetId], '1000', 'Original UTXO should be restored');
-  // Note: pending teleports are tricky - they might still exist but sourceHeight undefined
-  // The important thing is the UTXO state is correct
-
-  console.log('  ✓ Reorg with teleport passed');
-}
-
 function testReorgPreservesMempool() {
   console.log('Testing reorg preserves mempool transactions...');
 
@@ -1789,12 +1377,7 @@ async function runAllTests() {
   try {
     // Codec tests
     testCodecRoundTrip();
-    testTeleportCodec();
     testMetadataMerkleHash();
-    testTeleportCommitment();
-    testTeleportWitnessEncoding();
-    testVariableNonceSize();
-    testTeleportWithWitness();
     testEmptyGroupsPacket();
     testMaxU64Amount();
 
@@ -1808,7 +1391,6 @@ async function runAllTests() {
     testIndexerSimpleTransfer();
     testIndexerBurn();
     testIndexerImmutableMetadata();
-    testIndexerTeleportFlow();
     testIndexerValidationOutputBounds();
     testIndexerValidationSelfReference();
     testMultipleOpReturnHandling();
@@ -1829,16 +1411,10 @@ async function runAllTests() {
     testFreshIssuanceWithoutControl();
     testImmutableAssetCreation();
 
-    // Teleport edge case tests
-    testTeleportWrongPaymentScript();
-    testTeleportConfirmationDelay();
-    testTeleportConfirmationSuccess();
-
     // Reorg tests
     testBasicReorg();
     testReorgWithMultipleBlocks();
     testReorgWithNewChain();
-    testReorgWithTeleport();
     testReorgPreservesMempool();
     testReorgAtGenesis();
 
