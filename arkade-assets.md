@@ -74,16 +74,19 @@ scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 
 - **Magic_Bytes**: `0x41524b` ("ARK")
 - **TLV_Stream**: A concatenation of one or more TLV records.
-- **TLV Record**: `Type (1-byte) || Length (CompactSize) || Value (bytes)`
+- **TLV Record**: Format determined by type byte range:
+  - `0x00-0x3F`: Self-delimiting types. `Type || Payload` (no length field)
+  - `0x40-0x7F`: Variable-length spec types. `Type || Length (varint) || Payload`
+  - `0x80-0xFF`: Extensions. `Type || Length (varint) || Payload` (parsers can skip unknown)
 
 **Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
 
 ### Arkade Asset V1 Packet (Type 0x00)
 
-The Arkade Asset data is identified by `Type = 0x00`. The `Value` of this record is the asset payload itself.
+The Arkade Asset data is identified by `Type = 0x00`. As a self-delimiting type (range 0x00-0x3F), no length field is needed.
 
 ```
-<Type: 0x00> <Length: L> <Value: Asset_Payload>
+<Type: 0x00> <Asset_Payload>
 ```
 
 - **Asset_Payload**: The TLV packet containing asset group data (see below).
@@ -132,6 +135,25 @@ Instead of using a type marker for each optional field within a `Group`, the imp
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
 
+**Byte Order: Big-Endian**
+
+All multi-byte integer fields (u16) are encoded in **big-endian** (network byte order). This applies to:
+- `gidx` fields in `AssetId` and `AssetRef`
+- `i` (input index) in `AssetInput`
+- `o` (output index) in `AssetOutput`
+
+**Amount Encoding: Varint**
+
+All amount fields use Bitcoin's CompactSize varint encoding:
+- `0x00-0xFC`: 1 byte (values 0-252)
+- `0xFD` + u16 LE: 3 bytes (values 253-65535)
+- `0xFE` + u32 LE: 5 bytes (values 65536-4294967295)
+- `0xFF` + u64 LE: 9 bytes (values > 4294967295)
+
+Note: The varint payload bytes use little-endian per Bitcoin's CompactSize specification, while index fields use big-endian.
+
+This saves 7 bytes per NFT amount (amt=1) compared to fixed u64.
+
 **Variant Types: Type Markers**
 
 For data structures that represent one of several variants (a `oneof` structure), a **type marker byte** is used. This is consistent with the logical TLV model.
@@ -143,25 +165,77 @@ Type marker values are interpreted in the context of the structure being parsed;
 
 ### Types
 
+All u16 fields are big-endian encoded.
+
 ```
-AssetId   := { txid: bytes32, gidx: u16 } # the genesis tx id that first issued this asset & the index of the asset group in that packet
+AssetId   := { txid: bytes32, gidx: u16 BE } # genesis tx id + group index
 
 AssetRef  := oneof {
                0x01 BY_ID    { assetid: AssetId } # if existing asset
-             | 0x02 BY_GROUP { gidx: u16 } # if fresh asset (does not exist yet therefore no AssetId)
+             | 0x02 BY_GROUP { gidx: u16 BE } # if fresh asset (does not exist yet therefore no AssetId)
              }
 # BY_GROUP forward references are ALLOWED - gidx may reference a group that appears later in the packet.
 
 AssetInput := oneof {
-               0x01 LOCAL  { i: u32, amt: u64 }                  # input from same transaction's prevouts
-             | 0x02 INTENT { txid: bytes32, o: u32, amt: u64 }  # output from intent transaction
+               0x01 LOCAL  { i: u16 BE, amt: varint }              # input from same transaction's prevouts
+             | 0x02 INTENT { txid: bytes32, o: u16 BE, amt: varint }  # output from intent transaction
              }
 
-AssetOutput := { o: u32, amt: u64 }   # output within same transaction
+AssetOutput := { o: u16 BE, amt: varint }   # output within same transaction
 ```
 
 > **Note:** The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
 
+### 3.2. Complete Binary Encoding Reference
+
+For implementers, here is the complete binary format:
+
+```
+# OP_RETURN Structure
+OP_RETURN := "ARK" || Record+
+
+Record := oneof {
+  0x00-0x3F: Type || Payload                    # no length, self-delimiting
+  0x40-0x7F: Type || Length:varint || Payload   # length present, spec-defined
+  0x80-0xFF: Type || Length:varint || Payload   # length present, extensions
+}
+
+# Type 0x00: Assets (self-delimiting)
+Packet := {
+  GroupCount: varint
+  Groups[GroupCount]: Group
+}
+
+Group := {
+  Presence: u8                    # bits: 0x01=AssetId, 0x02=ControlAsset, 0x04=Metadata
+  AssetId?: AssetId               # if presence & 0x01
+  ControlAsset?: AssetRef         # if presence & 0x02 (genesis only)
+  Metadata?: Metadata             # if presence & 0x04 (genesis only)
+  InputCount: varint
+  Inputs[InputCount]: AssetInput
+  OutputCount: varint
+  Outputs[OutputCount]: AssetOutput
+}
+
+AssetId := { txid: bytes32, gidx: u16 BE }
+
+AssetRef := oneof {
+  0x01 BY_ID:    AssetId
+  0x02 BY_GROUP: u16 BE           # gidx reference within same packet
+}
+
+Metadata := {
+  Count: varint
+  Entries[Count]: { key_len: varint, key: bytes, value_len: varint, value: bytes }
+}
+
+AssetInput := oneof {
+  0x01 LOCAL:  { i: u16 BE, amt: varint }
+  0x02 INTENT: { txid: bytes32, o: u16 BE, amt: varint }
+}
+
+AssetOutput := { o: u16 BE, amt: varint }
+```
 
 ---
 
