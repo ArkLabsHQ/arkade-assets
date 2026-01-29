@@ -137,7 +137,7 @@ export interface Nft {
 // ----------------- CONFIG -----------------
 
 export const Config: ConfigType = {
-  u16LE: true,
+  u16LE: false,  // Big-endian for u16 fields
   u64LE: true,
   txidLE: false,
   varuint: 'compactsize',
@@ -422,9 +422,9 @@ export function decodeTeleportWitness(buf: Uint8Array, off: number): { witness: 
 
 function encodeAssetInput(input: AssetInput): Uint8Array {
   if (input.type === 'LOCAL') {
-    // Format: type(1) + index(2) + varint(amt) - variable length
+    // Format: type(1) + index(2, BE) + varint(amt)
     const typeBuf = new Uint8Array([0x01]);
-    const indexBuf = writeU16(input.i, true);
+    const indexBuf = writeU16(input.i, Config.u16LE);
     const amtBuf = encodeCompactSizeBigInt(BigInt(input.amt));
     return concatBytes(typeBuf, indexBuf, amtBuf);
   } else if (input.type === 'TELEPORT') {
@@ -440,9 +440,9 @@ function encodeAssetInput(input: AssetInput): Uint8Array {
 
 function encodeAssetOutput(output: AssetOutput): Uint8Array {
   if (output.type === 'LOCAL') {
-    // Format: type(1) + index(2) + varint(amt) - variable length
+    // Format: type(1) + index(2, BE) + varint(amt)
     const typeBuf = new Uint8Array([0x01]);
-    const indexBuf = writeU16(output.o, true);
+    const indexBuf = writeU16(output.o, Config.u16LE);
     const amtBuf = encodeCompactSizeBigInt(BigInt(output.amt));
     return concatBytes(typeBuf, indexBuf, amtBuf);
   } else if (output.type === 'TELEPORT') {
@@ -482,20 +482,9 @@ export function encodeGroup(group: Group): Uint8Array {
     throw new Error('Implement your canonical TLV tagging here.');
   }
 
-  // Packed counts encoding
-  const inCount = group.inputs.length;
-  const outCount = group.outputs.length;
-  const packed = (inCount << 4) | outCount;
-  if (inCount <= 15 && outCount <= 15 && packed !== 0xff) {
-    // Pack into single byte: high nibble = inputs, low nibble = outputs
-    // Note: 0xFF is reserved as escape byte, so (15, 15) uses escape format
-    byteList.push(new Uint8Array([packed]));
-  } else {
-    // Escape byte + two varints
-    byteList.push(new Uint8Array([0xff]));
-    byteList.push(encodeVarUint(inCount));
-    byteList.push(encodeVarUint(outCount));
-  }
+  // Input/output counts as separate varints
+  byteList.push(encodeVarUint(group.inputs.length));
+  byteList.push(encodeVarUint(group.outputs.length));
 
   for (const inp of group.inputs) byteList.push(encodeAssetInput(inp));
   for (const out of group.outputs) byteList.push(encodeAssetOutput(out));
@@ -658,25 +647,13 @@ export function decodeGroup(buf: Uint8Array, off: number): { group: Group; next:
   if (presence & 2) { const r = decodeIssuance(buf, cursor); group.issuance = r.issuance; cursor = r.next; }
   if (presence & 4) { const r = decodeMetadataMap(buf, cursor); group.metadata = r.map; cursor = r.next; }
 
-  // Decode packed counts
-  if (cursor >= buf.length) throw new Error('decodeGroup counts OOB');
-  let inCount: number, outCount: number;
-  const countsByte = buf[cursor];
-  if (countsByte === 0xff) {
-    // Escape: two separate varints
-    cursor += 1;
-    const vinCount = decodeVarUint(buf, cursor);
-    cursor += vinCount.size;
-    inCount = vinCount.value;
-    const voutCount = decodeVarUint(buf, cursor);
-    cursor += voutCount.size;
-    outCount = voutCount.value;
-  } else {
-    // Packed: high nibble = inputs, low nibble = outputs
-    inCount = (countsByte >> 4) & 0x0f;
-    outCount = countsByte & 0x0f;
-    cursor += 1;
-  }
+  // Decode input/output counts as separate varints
+  const vinCount = decodeVarUint(buf, cursor);
+  cursor += vinCount.size;
+  const inCount = vinCount.value;
+  const voutCount = decodeVarUint(buf, cursor);
+  cursor += voutCount.size;
+  const outCount = voutCount.value;
 
   for (let k = 0; k < inCount; k++) { const r = decodeAssetInput(buf, cursor); group.inputs.push(r.input); cursor = r.next; }
   for (let k = 0; k < outCount; k++) { const r = decodeAssetOutput(buf, cursor); group.outputs.push(r.output); cursor = r.next; }

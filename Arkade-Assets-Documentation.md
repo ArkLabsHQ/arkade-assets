@@ -113,26 +113,12 @@ Group := {
   AssetId?      : AssetId          # absent => fresh asset (AssetId* = (this_txid, group_index))
   ControlAsset? : AssetRef         # Genesis only: Defines the control asset for reissuance.
   Metadata?     : map<string, string> # Genesis only: Immutable metadata set at asset creation.
-  Counts        : PackedCounts
-  Inputs[]      : AssetInput
-  Outputs[]     : AssetOutput
+  InputCount    : varuint
+  Inputs[InputCount]  : AssetInput
+  OutputCount   : varuint
+  Outputs[OutputCount] : AssetOutput
 }
 ```
-
-### PackedCounts
-
-Encodes input and output counts in a single byte when both are ≤15 (common case):
-
-```
-PackedCounts := oneof {
-  0x00-0xFE: u8     # high nibble = input_count, low nibble = output_count (both ≤15)
-  0xFF: escape      # followed by varint(input_count) || varint(output_count)
-}
-```
-
-Examples:
-- `0x32` = 3 inputs, 2 outputs (typical transfer)
-- `0xFF 0x14 0x05` = 20 inputs, 5 outputs (rare large tx)
 
 ### 3.1. Encoding Details
 
@@ -149,13 +135,22 @@ Instead of using a type marker for each optional field within a `Group`, the imp
 
 The fields, if present, follow in that fixed order. This is more compact than a full TLV scheme for a small, fixed set of optional fields.
 
+**Byte Order: Big-Endian**
+
+All multi-byte integer fields (u16) are encoded in **big-endian** (network byte order). This applies to:
+- `gidx` fields in `AssetId` and `AssetRef`
+- `i` (input index) in `AssetInput`
+- `o` (output index) in `AssetOutput`
+
 **Amount Encoding: Varint**
 
 All amount fields use Bitcoin's CompactSize varint encoding:
 - `0x00-0xFC`: 1 byte (values 0-252)
-- `0xFD` + u16: 3 bytes (values 253-65535)
-- `0xFE` + u32: 5 bytes (values 65536-4294967295)
-- `0xFF` + u64: 9 bytes (values > 4294967295)
+- `0xFD` + u16 LE: 3 bytes (values 253-65535)
+- `0xFE` + u32 LE: 5 bytes (values 65536-4294967295)
+- `0xFF` + u64 LE: 9 bytes (values > 4294967295)
+
+Note: The varint payload bytes use little-endian per Bitcoin's CompactSize specification, while index fields use big-endian.
 
 This saves 7 bytes per NFT amount (amt=1) compared to fixed u64.
 
@@ -170,21 +165,23 @@ Type marker values are interpreted in the context of the structure being parsed;
 
 ### Types
 
+All u16 fields are big-endian encoded.
+
 ```
-AssetId   := { txid: bytes32, gidx: u16 } # the genesis tx id that first issued this asset & the index of the asset group in that packet
+AssetId   := { txid: bytes32, gidx: u16 BE } # genesis tx id + group index
 
 AssetRef  := oneof {
                0x01 BY_ID    { assetid: AssetId } # if existing asset
-             | 0x02 BY_GROUP { gidx: u16 } # if fresh asset (does not exist yet therefore no AssetId)
+             | 0x02 BY_GROUP { gidx: u16 BE } # if fresh asset (does not exist yet therefore no AssetId)
              }
 # BY_GROUP forward references are ALLOWED - gidx may reference a group that appears later in the packet.
 
 AssetInput := oneof {
-               0x01 LOCAL  { i: u16, amt: varint }              # input from same transaction's prevouts
-             | 0x02 INTENT { txid: bytes32, o: u16, amt: varint }  # output from intent transaction
+               0x01 LOCAL  { i: u16 BE, amt: varint }              # input from same transaction's prevouts
+             | 0x02 INTENT { txid: bytes32, o: u16 BE, amt: varint }  # output from intent transaction
              }
 
-AssetOutput := { o: u16, amt: varint }   # output within same transaction
+AssetOutput := { o: u16 BE, amt: varint }   # output within same transaction
 ```
 
 > **Note:** The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
@@ -214,21 +211,17 @@ Group := {
   AssetId?: AssetId               # if presence & 0x01
   ControlAsset?: AssetRef         # if presence & 0x02 (genesis only)
   Metadata?: Metadata             # if presence & 0x04 (genesis only)
-  Counts: PackedCounts
-  Inputs[]: AssetInput
-  Outputs[]: AssetOutput
+  InputCount: varint
+  Inputs[InputCount]: AssetInput
+  OutputCount: varint
+  Outputs[OutputCount]: AssetOutput
 }
 
-PackedCounts := oneof {
-  0x00-0xFE: u8                   # high nibble = in_count, low nibble = out_count
-  0xFF: varint || varint          # in_count || out_count (when either >15)
-}
-
-AssetId := { txid: bytes32, gidx: u16 }
+AssetId := { txid: bytes32, gidx: u16 BE }
 
 AssetRef := oneof {
   0x01 BY_ID:    AssetId
-  0x02 BY_GROUP: u16              # gidx reference within same packet
+  0x02 BY_GROUP: u16 BE           # gidx reference within same packet
 }
 
 Metadata := {
@@ -237,11 +230,11 @@ Metadata := {
 }
 
 AssetInput := oneof {
-  0x01 LOCAL:  { i: u16, amt: varint }
-  0x02 INTENT: { txid: bytes32, o: u16, amt: varint }
+  0x01 LOCAL:  { i: u16 BE, amt: varint }
+  0x02 INTENT: { txid: bytes32, o: u16 BE, amt: varint }
 }
 
-AssetOutput := { o: u16, amt: varint }
+AssetOutput := { o: u16 BE, amt: varint }
 ```
 
 ---
