@@ -24,7 +24,7 @@ jobs:
 
       - name: Build HTML
         run: |
-          npm install -g marked
+          npm install marked
           cat > build-html.js << 'SCRIPT'
           const fs = require('fs');
           const { marked } = require('marked');
