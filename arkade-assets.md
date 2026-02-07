@@ -139,12 +139,12 @@ The fields, if present, follow in that fixed order. This is more compact than a 
 
 All multi-byte integer fields are encoded in **little-endian**, consistent with Bitcoin's serialization convention. This applies to:
 - `gidx` fields in `AssetId` and `AssetRef`
-- `i` (input index) in `AssetInput`
-- `o` (output index) in `AssetOutput`
+- `vin` (input index) in `AssetInput`
+- `vout` (output index) in `AssetOutput`
 
 **Amount Encoding: Varint**
 
-All amount fields use Bitcoin's CompactSize varint encoding:
+All amount fields (u64) use Bitcoin's CompactSize varint encoding:
 - `0x00-0xFC`: 1 byte (values 0-252)
 - `0xFD` + u16 LE: 3 bytes (values 253-65535)
 - `0xFE` + u32 LE: 5 bytes (values 65536-4294967295)
@@ -175,11 +175,11 @@ AssetRef  := oneof {
 # BY_GROUP forward references are ALLOWED - gidx may reference a group that appears later in the packet.
 
 AssetInput := oneof {
-               0x01 LOCAL  { i: u16 LE, amt: varint }              # input from same transaction's prevouts
-             | 0x02 INTENT { txid: bytes32, o: u16 LE, amt: varint }  # output from intent transaction
+               0x01 LOCAL  { vin: u16 LE, amount: varint }              # input from same transaction's prevouts
+             | 0x02 INTENT { txid: bytes32, vout: u16 LE, amount: varint }  # output from intent transaction
              }
 
-AssetOutput := { o: u16 LE, amt: varint }   # output within same transaction
+AssetOutput := { vout: u16 LE, amount: varint }   # output within same transaction
 ```
 
 > **Note:** The intent system enables users to signal participation in a batch for new VTXOs. Intents are Arkade-specific ownership proofs that signals vtxos (and their asset) for later claiming by a commitment transaction and its batches.
@@ -190,15 +190,11 @@ For implementers, here is the complete binary format:
 
 ```
 # OP_RETURN Structure
-OP_RETURN := "ARK" || Record+
+OP_RETURN := "ARK" || AssetMarker || Packet
 
-Record := oneof {
-  0x00-0x3F: Type || Payload                    # no length, self-delimiting
-  0x40-0x7F: Type || Length:varint || Payload   # length present, spec-defined
-  0x80-0xFF: Type || Length:varint || Payload   # length present, extensions
-}
+AssetMarker := 0x00  # Identifier for op_ret asset data
 
-# Type 0x00: Assets (self-delimiting)
+# Asset Packet
 Packet := {
   GroupCount: varint
   Groups[GroupCount]: Group
@@ -228,11 +224,11 @@ Metadata := {
 }
 
 AssetInput := oneof {
-  0x01 LOCAL:  { i: u16 LE, amt: varint }
-  0x02 INTENT: { txid: bytes32, o: u16 LE, amt: varint }
+  0x01 LOCAL:  { vin: u16 LE, amount: varint }
+  0x02 INTENT: { txid: bytes32, vout: u16 LE, amount: varint }
 }
 
-AssetOutput := { o: u16 LE, amt: varint }
+AssetOutput := { vout: u16 LE, amount: varint }
 ```
 
 ---
@@ -266,9 +262,9 @@ Intent TX:
   vout 2 → new VTXO
 
 Asset packet:
-  { o: 0, amt: 50 }   # 50 tokens to on-chain
-  { o: 1, amt: 30 }   # 30 tokens to VTXO
-  { o: 2, amt: 20 }   # 20 tokens to VTXO
+  { vout: 0, amount: 50 }   # 50 tokens to on-chain
+  { vout: 1, amount: 30 }   # 30 tokens to VTXO
+  { vout: 2, amount: 20 }   # 20 tokens to VTXO
 ```
 
 
