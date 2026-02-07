@@ -1,0 +1,157 @@
+name: Build and Deploy Docs
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Concatenate source docs
+        run: bash build-docs.sh
+
+      - name: Build HTML
+        run: |
+          npm install -g marked
+          cat > build-html.js << 'SCRIPT'
+          const fs = require('fs');
+          const { marked } = require('marked');
+
+          // Custom renderer: emit mermaid blocks as <pre class="mermaid"> for client-side rendering
+          const renderer = new marked.Renderer();
+          const origCode = renderer.code.bind(renderer);
+          renderer.code = function({ text, lang }) {
+            if (lang === 'mermaid') {
+              return `<pre class="mermaid">${text}</pre>`;
+            }
+            return origCode({ text, lang });
+          };
+
+          const md = fs.readFileSync('Arkade-Assets-Documentation.md', 'utf8');
+          const content = marked.parse(md, { renderer });
+
+          const html = `<!DOCTYPE html>
+          <html lang="en">
+          <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Arkade Assets Documentation</title>
+          <style>
+          :root {
+            --bg: #ffffff;
+            --fg: #24292f;
+            --code-bg: #f6f8fa;
+            --border: #d0d7de;
+            --link: #0969da;
+            --heading: #1f2328;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --bg: #0d1117;
+              --fg: #c9d1d9;
+              --code-bg: #161b22;
+              --border: #30363d;
+              --link: #58a6ff;
+              --heading: #f0f6fc;
+            }
+          }
+          * { box-sizing: border-box; }
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--fg);
+            background: var(--bg);
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+          }
+          h1, h2, h3, h4, h5, h6 {
+            color: var(--heading);
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0.3em;
+            margin-top: 1.5em;
+          }
+          h1 { font-size: 2em; }
+          h2 { font-size: 1.5em; }
+          h3 { font-size: 1.25em; }
+          code {
+            background: var(--code-bg);
+            padding: 0.2em 0.4em;
+            border-radius: 6px;
+            font-size: 85%;
+            font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+          }
+          pre {
+            background: var(--code-bg);
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            border: 1px solid var(--border);
+          }
+          pre code { background: none; padding: 0; font-size: 85%; }
+          pre.mermaid {
+            background: none;
+            border: none;
+            text-align: center;
+            padding: 0;
+          }
+          a { color: var(--link); text-decoration: none; }
+          a:hover { text-decoration: underline; }
+          blockquote {
+            border-left: 4px solid var(--border);
+            margin: 0;
+            padding: 0.5em 1em;
+            color: var(--fg);
+            opacity: 0.85;
+          }
+          table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+          th, td { border: 1px solid var(--border); padding: 0.5em 1em; text-align: left; }
+          th { background: var(--code-bg); }
+          hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+          ul, ol { padding-left: 2em; }
+          li { margin: 0.25em 0; }
+          img { max-width: 100%; }
+          </style>
+          </head>
+          <body>
+          ${content}
+          <script type="module">
+            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+            mermaid.initialize({
+              startOnLoad: true,
+              theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default'
+            });
+          </script>
+          </body>
+          </html>`;
+
+          fs.mkdirSync('_site', { recursive: true });
+          fs.writeFileSync('_site/index.html', html);
+          SCRIPT
+          node build-html.js
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

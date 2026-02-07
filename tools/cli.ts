@@ -14,8 +14,6 @@ import {
   exampleG_burn,
   exampleH_reissuance,
   exampleI_multi_asset_per_utxo,
-  exampleJ_teleport_commit,
-  exampleK_teleport_claim,
   exampleL_multi_asset_per_tx,
 } from './example-txs';
 import { Indexer } from './indexer';
@@ -35,7 +33,6 @@ function handleMakeTx(args: { [key: string]: any }): void {
   let tx;
 
   if (args.example) {
-    const commitmentHex = (args.commitment as string) || 'ab'.repeat(32);
     switch (args.example.toUpperCase()) {
       case 'A':
         tx = exampleA(txidHex);
@@ -61,18 +58,12 @@ function handleMakeTx(args: { [key: string]: any }): void {
       case 'I':
         tx = exampleI_multi_asset_per_utxo(txidHex);
         break;
-      case 'J':
-        tx = exampleJ_teleport_commit(txidHex, commitmentHex);
-        break;
-      case 'K':
-        tx = exampleK_teleport_claim(txidHex, commitmentHex);
-        break;
       case 'L':
         tx = exampleL_multi_asset_per_tx(txidHex);
         break;
       default:
         console.error(`Unknown example: ${args.example}`);
-        console.error('Available examples: A, B, C, E, F, G, H, I, J, K, L');
+        console.error('Available examples: A, B, C, E, F, G, H, I, L');
         process.exit(1);
     }
   } else if (args['update-metadata']) {

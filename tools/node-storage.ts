@@ -12,7 +12,7 @@ export class NodeFileStorage implements Storage {
 
   constructor(rootDir: string) {
     this._rootDir = rootDir;
-    this.state = { assets: {}, utxos: {}, transactions: {}, pendingTeleports: {}, blockHeight: -1 };
+    this.state = { assets: {}, utxos: {}, transactions: {}, blockHeight: -1 };
   }
 
   private _statePath(height: number): string {
@@ -36,7 +36,7 @@ export class NodeFileStorage implements Storage {
   load(height?: number): void {
     const heightToLoad = height === undefined ? this._getLatestHeight() : height;
     if (heightToLoad === -1) {
-      this.state = { assets: {}, utxos: {}, transactions: {}, pendingTeleports: {}, blockHeight: -1 };
+      this.state = { assets: {}, utxos: {}, transactions: {}, blockHeight: -1 };
       return;
     }
     const statePath = this._statePath(heightToLoad);

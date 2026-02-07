@@ -6,8 +6,6 @@ import { Packet, Group, AssetId, AssetRef, AssetInput, AssetOutput } from './ark
 
 // ----------------- TYPE DEFINITIONS -----------------
 
-const MIN_TELEPORT_CONFIRMATIONS = 6;
-
 interface TxVin {
   txid: string;
   vout: number;
@@ -33,14 +31,6 @@ interface AssetDefinition {
 interface AssetState { [assetKey: string]: AssetDefinition; }
 interface UtxoContent { [assetKey: string]: string; }
 interface UtxoState { [utxoKey: string]: UtxoContent; }
-interface PendingTeleport {
-  assetId: AssetId;
-  amount: string;
-  sourceTxid: string;
-  sourceHeight?: number; // Undefined for arkade-native teleports
-}
-
-interface PendingTeleportsState { [commitment: string]: PendingTeleport; }
 
 interface TransactionState { [txid: string]: Tx & { status: 'confirmed' | 'arkade', processed_at: string } }
 
@@ -48,7 +38,6 @@ export interface State {
   assets: AssetState;
   utxos: UtxoState;
   transactions: TransactionState;
-  pendingTeleports: PendingTeleportsState;
   blockHeight: number;
 }
 
@@ -79,9 +68,6 @@ export class Indexer {
   constructor(storage: Storage) {
     this.store = storage;
     this.store.load();
-    if (!this.store.state.pendingTeleports) {
-      this.store.state.pendingTeleports = {};
-    }
   }
 
   getHeight(): number {
@@ -164,13 +150,6 @@ export class Indexer {
 
     // Load the state of the block to be rolled back to identify its transactions
     const lastBlockState: State = JSON.parse(JSON.stringify(this.store.state));
-
-    // Invalidate any teleports that were created in the rolled-back block
-    for (const [commitment, teleport] of Object.entries(lastBlockState.pendingTeleports)) {
-      if (!this.store.state.pendingTeleports[commitment]) {
-        delete lastBlockState.pendingTeleports[commitment];
-      }
-    }
 
     // Load the previous state
     this.store.delete(currentHeight);
@@ -354,25 +333,21 @@ export class Indexer {
           if (!prevoutConsumption[prevKey]) prevoutConsumption[prevKey] = {};
           if (!prevoutConsumption[prevKey][assetKey]) prevoutConsumption[prevKey][assetKey] = 0n;
           prevoutConsumption[prevKey][assetKey] += BigInt(inp.amt);
-                } else if (inp.type === 'TELEPORT') {
-          // Derive commitment from witness
-          const commitment = codec.getWitnessCommitment(inp.witness);
-          const pending = state.pendingTeleports[commitment];
-          if (!pending) throw new Error(`TELEPORT input commitment ${commitment} not found`);
-
-          // If a teleport originates from a confirmed block, it requires a confirmation delay.
-          if (pending.sourceHeight !== undefined) {
-            const currentHeight = blockHeight ?? state.blockHeight;
-            const confirmations = currentHeight - pending.sourceHeight;
-            if (confirmations < MIN_TELEPORT_CONFIRMATIONS) {
-              throw new Error(`TELEPORT input ${commitment} does not have enough confirmations: ${confirmations}/${MIN_TELEPORT_CONFIRMATIONS}`);
-            }
+        } else if (inp.type === 'INTENT') {
+          // INTENT input references an output from a previous intent transaction
+          const intentUtxoKey = Indexer.utxoKey(inp.txid, inp.o);
+          const intentAssets = state.utxos[intentUtxoKey];
+          if (!intentAssets || !intentAssets[assetKey]) {
+            throw new Error(`INTENT input references non-existent asset at ${intentUtxoKey}`);
           }
-
-          if (pending.assetId.txidHex !== g.assetId.txidHex || pending.assetId.gidx !== g.assetId.gidx || BigInt(pending.amount) !== BigInt(inp.amt)) {
-            throw new Error(`TELEPORT input ${commitment} mismatch`);
+          const availableAmt = BigInt(intentAssets[assetKey]);
+          if (BigInt(inp.amt) > availableAmt) {
+            throw new Error(`INTENT input claims ${inp.amt} but only ${availableAmt} available at ${intentUtxoKey}`);
           }
-          delete state.pendingTeleports[commitment];
+          // Track consumption from intent UTXO
+          if (!prevoutConsumption[intentUtxoKey]) prevoutConsumption[intentUtxoKey] = {};
+          if (!prevoutConsumption[intentUtxoKey][assetKey]) prevoutConsumption[intentUtxoKey][assetKey] = 0n;
+          prevoutConsumption[intentUtxoKey][assetKey] += BigInt(inp.amt);
           sumIn += BigInt(inp.amt);
         }
       }
@@ -383,19 +358,7 @@ export class Indexer {
           throw new Error(`Zero or negative amount in output is invalid`);
         }
         sumOut += BigInt(out.amt);
-        if (out.type === 'TELEPORT') {
-          if (state.pendingTeleports[out.commitment]) {
-            // If it's an unconfirmed teleport being confirmed, update its sourceHeight.
-            if (blockHeight !== undefined && state.pendingTeleports[out.commitment].sourceHeight === undefined) {
-              state.pendingTeleports[out.commitment].sourceHeight = blockHeight;
-            } else {
-              throw new Error(`Duplicate teleport commitment ${out.commitment}`);
-            }
-          } else {
-            // Add new teleport to pending list.
-            state.pendingTeleports[out.commitment] = { assetId: g.assetId, amount: BigInt(out.amt).toString(), sourceTxid: tx.txid, sourceHeight: blockHeight };
-          }
-        }
+        // All outputs are LOCAL now
       }
       groupSums.push({ assetKey, sumIn, sumOut, delta: sumOut - sumIn });
     }
