@@ -11,5 +11,4 @@ Test fixtures for the Arkade assets library. Each JSON has **valid** and/or **in
 | [asset_ref_fixtures.json](asset_ref_fixtures.json) | Asset ref by ID or group index: valid ID/group + overflow/underflow; invalid format/type/length. |
 | [metadata_fixtures.json](metadata_fixtures.json) | Key-value metadata: valid (simple, JSON, non-ASCII, long/short); invalid empty key/value, bad length. |
 | [packet_fixtures.json](packet_fixtures.json) | OP_RETURN packets: build from assets, parse from script/txout, leaf (intent); invalid assets, script, prefix. |
-| [subdust_fixtures.json](subdust_fixtures.json) | Subdust packets and tx_outs: valid default; invalid empty packet, missing OP_RETURN. |
 | [tx_validation_fixtures.json](tx_validation_fixtures.json) | Full tx validation: valid (no packet, issuance, transfer, reissuance, burn); invalid index/ref/control/amount errors. |
