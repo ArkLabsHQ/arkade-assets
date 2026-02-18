@@ -122,8 +122,8 @@
         },
         {
             "name": "invalid length",
-            "serializedHex": "013101",
-            "description": "invalid metadata length (too short)"
+            "serializedHex": "01013101",
+            "description": "invalid metadata list length (too short)"
         }
     ]
 }
