@@ -109,32 +109,21 @@
             }
         ]
     },
-    "invalid": {
-        "newMetadata": [
-            {
-                "name": "empty key",
-                "key": "",
-                "value": "value",
-                "expectedError": "missing metadata key"
-            },
-            {
-                "name": "empty value",
-                "key": "key",
-                "value": "",
-                "expectedError": "missing metadata value"
-            }
-        ],
-        "newMetadataFromString": [
-            {
-                "name": "empty",
-                "serializedHex": "",
-                "expectedError": "missing metadata"
-            },
-            {
-                "name": "invalid length",
-                "serializedHex": "013101",
-                "expectedError": "invalid metadata length"
-            }
-        ]
-    }
+    "invalid": [
+        {
+            "name": "empty",
+            "serializedHex": "",
+            "description": "string must not be empty"
+        },
+        {
+            "name": "invalid format",
+            "serializedHex": "invalid",
+            "description": "string format must be hex"
+        },
+        {
+            "name": "invalid length",
+            "serializedHex": "013101",
+            "description": "invalid metadata length (too short)"
+        }
+    ]
 }

@@ -1,6 +1,6 @@
 {
   "valid": {
-    "newAssetRefFromId": [
+    "assetRefFromId": [
       {
         "name": "random",
         "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -8,7 +8,7 @@
         "serializedHex": "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2a00"
       }
     ],
-    "newAssetRefFromGroup": [
+    "assetRefFromGroupIndex": [
       {
         "name": "zero index",
         "index": 0,
@@ -36,33 +36,31 @@
       }
     ]
   },
-  "invalid": {
-    "newAssetRefFromString": [
-      {
-        "name": "empty ref",
-        "serializedHex": "",
-        "expectedError": "missing asset ref"
-      },
-      {
-        "name": "invalid ref",
-        "serializedHex": "invalid",
-        "expectedError": "invalid asset ref format"
-      },
-      {
-        "name": "invalid ref length",
-        "serializedHex": "0200",
-        "expectedError": "invalid asset ref length"
-      },
-      {
-        "name": "unspecified ref type",
-        "serializedHex": "000005",
-        "expectedError": "asset ref type unspecified"
-      },
-      {
-        "name": "unknown ref type",
-        "serializedHex": "030005",
-        "expectedError": "asset ref type unknown"
-      }
-    ]
-  }
+  "invalid": [
+    {
+      "name": "empty",
+      "serializedHex": "",
+      "description": "string must not be empty"
+    },
+    {
+      "name": "invalid format",
+      "serializedHex": "invalid",
+      "description": "string format must be hex"
+    },
+    {
+      "name": "invalid ref length",
+      "serializedHex": "0200",
+      "description": "invalid asset ref length (too short)"
+    },
+    {
+      "name": "unspecified ref type",
+      "serializedHex": "000005",
+      "description": "asset ref type unspecified"
+    },
+    {
+      "name": "unknown ref type",
+      "serializedHex": "030005",
+      "description": "asset ref type unknown"
+    }
+  ]
 }
