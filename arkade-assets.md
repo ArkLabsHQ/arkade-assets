@@ -59,7 +59,7 @@ When an asset is first created (i.e., the `AssetId` is omitted from the group), 
 
 **Metadata Hashing (Taproot-aligned Merkle Tree)**
 
-The `metadataHash` is the **Merkle root** of the asset's metadata, computed at genesis. The tree construction is aligned with BIP-341 Taproot taptrees, enabling a single generalized `OP_MERKLEPATHVERIFY` opcode for both Taproot script-path and Arkade metadata inclusion proofs.
+The `metadataHash` is the **Merkle root** of the asset's metadata, computed at genesis. The tree construction is aligned with BIP-341 taptrees, enabling a single generalized `OP_MERKLEPATHVERIFY` opcode for merkle inclusion proofs.
 
 **Tagged Hash Primitive (BIP-341)**
 
