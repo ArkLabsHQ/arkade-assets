@@ -612,7 +612,7 @@ export function parseOpReturnScript(buf: Uint8Array): Packet | null {
   }
 }
 
-// ----------------- MERKLE TREE (Taproot-aligned) -----------------
+// ----------------- MERKLE TREE (BIP-341-aligned) -----------------
 
 /**
  * SHA256 primitive. Uses @noble/hashes if available, otherwise Node.js crypto.
@@ -662,9 +662,9 @@ export const ARK_LEAF_VERSION = 0x00;
  * Computes the leaf hash for a single metadata key-value pair.
  * Follows the Taproot leaf pattern with an Arkade-specific tag:
  *
- *   leaf = tagged_hash("ArkLeaf", leaf_version || varuint(len(key)) || key || varuint(len(value)) || value)
+ *   leaf = tagged_hash("ArkadeAssetLeaf", leaf_version || varuint(len(key)) || key || varuint(len(value)) || value)
  *
- * - "ArkLeaf" tag provides domain separation from TapLeaf and TapBranch
+ * - "ArkadeAssetLeaf" tag provides domain separation from TapLeaf and other tree types
  * - leaf_version (1 byte, currently 0x00) allows future metadata encoding changes
  */
 export function computeMetadataLeafHash(key: string, value: string): Uint8Array {
@@ -677,17 +677,18 @@ export function computeMetadataLeafHash(key: string, value: string): Uint8Array 
     encodeVarUint(valueBytes.length),
     valueBytes
   );
-  return taggedHash('ArkLeaf', data);
+  return taggedHash('ArkadeAssetLeaf', data);
 }
 
 /**
- * Computes a branch hash using the same construction as BIP-341 TapBranch:
+ * Computes a branch hash following the BIP-341 construction pattern:
  *
- *   branch = tagged_hash("TapBranch", min(a, b) || max(a, b))
+ *   branch = tagged_hash("ArkadeAssetBranch", min(a, b) || max(a, b))
  *
  * Children are lexicographically sorted so that proofs don't need direction bits.
- * Reusing "TapBranch" means a single OP_MERKLEPATHVERIFY opcode can verify
- * both Taproot taptree and Arkade metadata inclusion proofs.
+ * Uses "ArkadeAssetBranch" for domain separation from Taproot's "TapBranch". The
+ * generalized OP_MERKLEPATHVERIFY opcode accepts the branch tag as a parameter,
+ * so both Taproot and Arkade trees are supported without hardcoding tags.
  */
 export function computeBranchHash(a: Uint8Array, b: Uint8Array): Uint8Array {
   // Lexicographic comparison — smaller hash comes first
@@ -696,7 +697,7 @@ export function computeBranchHash(a: Uint8Array, b: Uint8Array): Uint8Array {
     if (a[i] < b[i]) break;
     if (a[i] > b[i]) { first = b; second = a; break; }
   }
-  return taggedHash('TapBranch', concatBytes(first, second));
+  return taggedHash('ArkadeAssetBranch', concatBytes(first, second));
 }
 
 /**
@@ -704,21 +705,21 @@ export function computeBranchHash(a: Uint8Array, b: Uint8Array): Uint8Array {
  * Keys are sorted lexicographically before hashing.
  *
  * Tree construction:
- * - Leaves: tagged_hash("ArkLeaf", version || encoded_entry)
- * - Branches: tagged_hash("TapBranch", sorted(left, right))
+ * - Leaves: tagged_hash("ArkadeAssetLeaf", version || encoded_entry)
+ * - Branches: tagged_hash("ArkadeAssetBranch", sorted(left, right))
  * - Odd leaf at any level: promoted to next level (unpaired)
  */
 export function computeMetadataMerkleRoot(metadata: MetadataMap): Uint8Array {
   const keys = Object.keys(metadata).sort();
 
   if (keys.length === 0) {
-    return taggedHash('ArkLeaf', new Uint8Array([ARK_LEAF_VERSION]));
+    return taggedHash('ArkadeAssetLeaf', new Uint8Array([ARK_LEAF_VERSION]));
   }
 
   // Compute leaf hashes
   let nodes = keys.map(key => computeMetadataLeafHash(key, metadata[key]));
 
-  // Build tree bottom-up using TapBranch for internal nodes
+  // Build tree bottom-up using ArkadeAssetBranch for internal nodes
   while (nodes.length > 1) {
     const nextLevel: Uint8Array[] = [];
     for (let i = 0; i < nodes.length; i += 2) {
@@ -798,8 +799,8 @@ export function computeMetadataMerkleProof(metadata: MetadataMap, targetKey: str
  * Verifies a Merkle inclusion proof against an expected root.
  * This is the algorithm a generalized OP_MERKLEPATHVERIFY would execute.
  *
- * Uses tagged_hash("TapBranch", sorted(a, b)) at every level — identical to
- * Taproot taptree verification. The caller precomputes the leaf hash.
+ * Uses tagged_hash("ArkadeAssetBranch", sorted(a, b)) at every level.
+ * The caller precomputes the leaf hash.
  */
 export function verifyMerkleProof(leafHash: Uint8Array, proof: Uint8Array[], expectedRoot: Uint8Array): boolean {
   let current = leafHash;

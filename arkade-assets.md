@@ -74,22 +74,22 @@ This provides domain separation — a leaf hash can never collide with a branch 
 **Leaf Construction**
 
 ```
-leaf[i] = tagged_hash("ArkLeaf", leaf_version || varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])
+leaf[i] = tagged_hash("ArkadeAssetLeaf", leaf_version || varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])
 ```
 
-- `"ArkLeaf"` tag separates Arkade metadata leaves from Taproot's `"TapLeaf"` and from branch hashes
+- `"ArkadeAssetLeaf"` tag separates Arkade metadata leaves from Taproot's `"TapLeaf"` and from branch hashes
 - `leaf_version` (1 byte, currently `0x00`) enables future metadata encoding formats without changing the tree structure
 - Key-value pairs MUST be sorted by key before hashing to ensure a deterministic root
 
-**Branch Construction (shared with Taproot)**
+**Branch Construction**
 
 ```
-branch = tagged_hash("TapBranch", min(left, right) || max(left, right))
+branch = tagged_hash("ArkadeAssetBranch", min(left, right) || max(left, right))
 ```
 
-- Children are **lexicographically sorted** (smaller 32-byte hash first), identical to BIP-341 `TapBranch`
+- Children are **lexicographically sorted** (smaller 32-byte hash first), following the BIP-341 pattern
 - This eliminates direction bits from inclusion proofs — the verifier infers ordering from the hash values
-- Reusing the `"TapBranch"` tag means the merkle path verification algorithm is byte-for-byte identical to Taproot taptree verification
+- `"ArkadeAssetBranch"` provides domain separation from Taproot's `"TapBranch"`. The generalized `OP_MERKLEPATHVERIFY` opcode accepts the branch tag as a stack parameter, supporting both tree types
 
 **Odd Leaf Handling**: If a tree level has an odd number of nodes, the unpaired node is promoted to the next level without hashing.
 

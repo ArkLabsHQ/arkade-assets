@@ -1377,7 +1377,7 @@ function testReorgAtGenesis() {
   console.log('  ✓ Reorg at genesis passed');
 }
 
-// ----------------- TAPROOT-ALIGNED MERKLE TREE TESTS -----------------
+// ----------------- MERKLE TREE TESTS (BIP-341-aligned) -----------------
 
 function testTaggedHashDomainSeparation() {
   console.log('Testing tagged hash domain separation...');
@@ -1385,42 +1385,42 @@ function testTaggedHashDomainSeparation() {
   const msg = new Uint8Array([0x01, 0x02, 0x03]);
 
   // Different tags must produce different hashes for the same message
-  const h1 = taggedHash('ArkLeaf', msg);
-  const h2 = taggedHash('TapBranch', msg);
+  const h1 = taggedHash('ArkadeAssetLeaf', msg);
+  const h2 = taggedHash('ArkadeAssetBranch', msg);
   const h3 = taggedHash('TapLeaf', msg);
 
-  assert.notDeepStrictEqual(h1, h2, 'ArkLeaf and TapBranch should differ');
-  assert.notDeepStrictEqual(h1, h3, 'ArkLeaf and TapLeaf should differ');
-  assert.notDeepStrictEqual(h2, h3, 'TapBranch and TapLeaf should differ');
+  assert.notDeepStrictEqual(h1, h2, 'ArkadeAssetLeaf and ArkadeAssetBranch should differ');
+  assert.notDeepStrictEqual(h1, h3, 'ArkadeAssetLeaf and TapLeaf should differ');
+  assert.notDeepStrictEqual(h2, h3, 'ArkadeAssetBranch and TapLeaf should differ');
 
   // Same tag + same message must be deterministic
-  const h1b = taggedHash('ArkLeaf', msg);
+  const h1b = taggedHash('ArkadeAssetLeaf', msg);
   assert.deepStrictEqual(h1, h1b, 'Same tag+msg should be deterministic');
 
   console.log('  ✓ Tagged hash domain separation passed');
 }
 
-function testLeafUsesArkLeafTag() {
-  console.log('Testing leaf uses ArkLeaf tagged hash with version byte...');
+function testLeafUsesArkadeAssetLeafTag() {
+  console.log('Testing leaf uses ArkadeAssetLeaf tagged hash with version byte...');
 
   const leaf = computeMetadataLeafHash('name', 'Token');
 
-  // Manually compute expected: tagged_hash("ArkLeaf", 0x00 || varuint(4) || "name" || varuint(5) || "Token")
+  // Manually compute expected: tagged_hash("ArkadeAssetLeaf", 0x00 || varuint(4) || "name" || varuint(5) || "Token")
   const te = new TextEncoder();
-  const expected = taggedHash('ArkLeaf', new Uint8Array([
+  const expected = taggedHash('ArkadeAssetLeaf', new Uint8Array([
     ARK_LEAF_VERSION,
     4, ...te.encode('name'),
     5, ...te.encode('Token'),
   ]));
 
-  assert.deepStrictEqual(leaf, expected, 'Leaf should use tagged_hash("ArkLeaf", version || data)');
+  assert.deepStrictEqual(leaf, expected, 'Leaf should use tagged_hash("ArkadeAssetLeaf", version || data)');
   assert.strictEqual(leaf.length, 32, 'Leaf hash should be 32 bytes');
 
-  console.log('  ✓ Leaf uses ArkLeaf tagged hash passed');
+  console.log('  ✓ Leaf uses ArkadeAssetLeaf tagged hash passed');
 }
 
 function testBranchUsesLexicographicSorting() {
-  console.log('Testing branch uses lexicographic sorting (TapBranch)...');
+  console.log('Testing branch uses lexicographic sorting (ArkadeAssetBranch)...');
 
   const a = computeMetadataLeafHash('aaa', 'val1');
   const b = computeMetadataLeafHash('bbb', 'val2');
@@ -1431,14 +1431,14 @@ function testBranchUsesLexicographicSorting() {
 
   assert.deepStrictEqual(hash_ab, hash_ba, 'Branch hash must be order-independent (sorted)');
 
-  // Verify it's actually using TapBranch tag
+  // Verify it's actually using ArkadeAssetBranch tag
   let first = a, second = b;
   for (let i = 0; i < 32; i++) {
     if (a[i] < b[i]) break;
     if (a[i] > b[i]) { first = b; second = a; break; }
   }
-  const expected = taggedHash('TapBranch', new Uint8Array([...first, ...second]));
-  assert.deepStrictEqual(hash_ab, expected, 'Branch should use tagged_hash("TapBranch", sorted(a,b))');
+  const expected = taggedHash('ArkadeAssetBranch', new Uint8Array([...first, ...second]));
+  assert.deepStrictEqual(hash_ab, expected, 'Branch should use tagged_hash("ArkadeAssetBranch", sorted(a,b))');
 
   console.log('  ✓ Branch uses lexicographic sorting passed');
 }
@@ -1497,7 +1497,7 @@ function testMerkleProofTwoEntries() {
   const genLeaf = computeMetadataLeafHash('generation', '0');
   const genomeLeaf = computeMetadataLeafHash('genome', '733833e4519f1811c5f81b12ab391cb3');
 
-  // Root should be TapBranch(sorted(genLeaf, genomeLeaf))
+  // Root should be ArkadeAssetBranch(sorted(genLeaf, genomeLeaf))
   const expectedRoot = computeBranchHash(genLeaf, genomeLeaf);
   assert.deepStrictEqual(root, expectedRoot, 'Two-leaf root should be branch(sorted(leaf1, leaf2))');
 
@@ -1579,7 +1579,7 @@ async function runAllTests() {
 
     // Taproot-aligned merkle tree tests
     testTaggedHashDomainSeparation();
-    testLeafUsesArkLeafTag();
+    testLeafUsesArkadeAssetLeafTag();
     testBranchUsesLexicographicSorting();
     testMerkleProofGeneration();
     testMerkleProofSingleEntry();
