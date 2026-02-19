@@ -57,12 +57,41 @@ Metadata is defined at genesis and is **immutable**—it cannot be changed after
 
 When an asset is first created (i.e., the `AssetId` is omitted from the group), the optional `Metadata` map in the `Group` defines its permanent metadata. This is useful for defining core properties like names, images, or application-specific data.
 
-**Metadata Hashing**
+**Metadata Hashing (Taproot-aligned Merkle Tree)**
 
-The `metadataHash` is the **Merkle root** of the asset's metadata, computed at genesis:
+The `metadataHash` is the **Merkle root** of the asset's metadata, computed at genesis. The tree construction is aligned with BIP-341 Taproot taptrees, enabling a single generalized `OP_MERKLEPATHVERIFY` opcode for both Taproot script-path and Arkade metadata inclusion proofs.
 
-- **Leaf Generation**: The leaves of the Merkle tree are the `sha256` hashes of the canonically encoded key-value pairs. The pairs MUST be sorted by key before hashing to ensure a deterministic root.
-- **Canonical Entry Format**: `leaf[i] = sha256(varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])`
+**Tagged Hash Primitive (BIP-341)**
+
+All Merkle tree hashes use the tagged hash construction from BIP-341:
+
+```
+tagged_hash(tag, msg) = SHA256(SHA256(tag) || SHA256(tag) || msg)
+```
+
+This provides domain separation — a leaf hash can never collide with a branch hash or with hashes from other protocols.
+
+**Leaf Construction**
+
+```
+leaf[i] = tagged_hash("ArkLeaf", leaf_version || varuint(len(key[i])) || key[i] || varuint(len(value[i])) || value[i])
+```
+
+- `"ArkLeaf"` tag separates Arkade metadata leaves from Taproot's `"TapLeaf"` and from branch hashes
+- `leaf_version` (1 byte, currently `0x00`) enables future metadata encoding formats without changing the tree structure
+- Key-value pairs MUST be sorted by key before hashing to ensure a deterministic root
+
+**Branch Construction (shared with Taproot)**
+
+```
+branch = tagged_hash("TapBranch", min(left, right) || max(left, right))
+```
+
+- Children are **lexicographically sorted** (smaller 32-byte hash first), identical to BIP-341 `TapBranch`
+- This eliminates direction bits from inclusion proofs — the verifier infers ordering from the hash values
+- Reusing the `"TapBranch"` tag means the merkle path verification algorithm is byte-for-byte identical to Taproot taptree verification
+
+**Odd Leaf Handling**: If a tree level has an odd number of nodes, the unpaired node is promoted to the next level without hashing.
 
 ## 2. OP\_RETURN structure
 
