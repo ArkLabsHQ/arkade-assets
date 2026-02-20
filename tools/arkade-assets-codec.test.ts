@@ -6,7 +6,15 @@ import {
   buildOpReturnPayload,
   Config,
   computeMetadataMerkleRootHex,
+  computeMetadataLeafHash,
+  computeMetadataMerkleRoot,
+  computeMetadataMerkleProof,
+  computeBranchHash,
+  verifyMerkleProof,
+  taggedHash,
+  ARK_LEAF_VERSION,
   hexToBytes,
+  bufToHex,
 } from './arkade-assets-codec';
 import { Indexer, State, Storage } from './indexer';
 import {
@@ -1369,6 +1377,189 @@ function testReorgAtGenesis() {
   console.log('  ✓ Reorg at genesis passed');
 }
 
+// ----------------- MERKLE TREE TESTS (BIP-341-aligned) -----------------
+
+function testTaggedHashDomainSeparation() {
+  console.log('Testing tagged hash domain separation...');
+
+  const msg = new Uint8Array([0x01, 0x02, 0x03]);
+
+  // Different tags must produce different hashes for the same message
+  const h1 = taggedHash('ArkadeAssetLeaf', msg);
+  const h2 = taggedHash('ArkadeAssetBranch', msg);
+  const h3 = taggedHash('TapLeaf', msg);
+
+  assert.notDeepStrictEqual(h1, h2, 'ArkadeAssetLeaf and ArkadeAssetBranch should differ');
+  assert.notDeepStrictEqual(h1, h3, 'ArkadeAssetLeaf and TapLeaf should differ');
+  assert.notDeepStrictEqual(h2, h3, 'ArkadeAssetBranch and TapLeaf should differ');
+
+  // Same tag + same message must be deterministic
+  const h1b = taggedHash('ArkadeAssetLeaf', msg);
+  assert.deepStrictEqual(h1, h1b, 'Same tag+msg should be deterministic');
+
+  console.log('  ✓ Tagged hash domain separation passed');
+}
+
+function testLeafUsesArkadeAssetLeafTag() {
+  console.log('Testing leaf uses ArkadeAssetLeaf tagged hash with version byte...');
+
+  const leaf = computeMetadataLeafHash('name', 'Token');
+
+  // Manually compute expected: tagged_hash("ArkadeAssetLeaf", 0x00 || varuint(4) || "name" || varuint(5) || "Token")
+  const te = new TextEncoder();
+  const expected = taggedHash('ArkadeAssetLeaf', new Uint8Array([
+    ARK_LEAF_VERSION,
+    4, ...te.encode('name'),
+    5, ...te.encode('Token'),
+  ]));
+
+  assert.deepStrictEqual(leaf, expected, 'Leaf should use tagged_hash("ArkadeAssetLeaf", version || data)');
+  assert.strictEqual(leaf.length, 32, 'Leaf hash should be 32 bytes');
+
+  console.log('  ✓ Leaf uses ArkadeAssetLeaf tagged hash passed');
+}
+
+function testBranchUsesLexicographicSorting() {
+  console.log('Testing branch uses lexicographic sorting (ArkadeAssetBranch)...');
+
+  const a = computeMetadataLeafHash('aaa', 'val1');
+  const b = computeMetadataLeafHash('bbb', 'val2');
+
+  // computeBranchHash should sort, so order of arguments shouldn't matter
+  const hash_ab = computeBranchHash(a, b);
+  const hash_ba = computeBranchHash(b, a);
+
+  assert.deepStrictEqual(hash_ab, hash_ba, 'Branch hash must be order-independent (sorted)');
+
+  // Verify it's actually using ArkadeAssetBranch tag
+  let first = a, second = b;
+  for (let i = 0; i < 32; i++) {
+    if (a[i] < b[i]) break;
+    if (a[i] > b[i]) { first = b; second = a; break; }
+  }
+  const expected = taggedHash('ArkadeAssetBranch', new Uint8Array([...first, ...second]));
+  assert.deepStrictEqual(hash_ab, expected, 'Branch should use tagged_hash("ArkadeAssetBranch", sorted(a,b))');
+
+  console.log('  ✓ Branch uses lexicographic sorting passed');
+}
+
+function testMerkleProofGeneration() {
+  console.log('Testing Merkle proof generation and verification...');
+
+  const metadata = { name: 'TestToken', ticker: 'TST', decimals: '8' };
+  const root = computeMetadataMerkleRoot(metadata);
+
+  // Generate and verify proof for each key
+  for (const key of Object.keys(metadata)) {
+    const proof = computeMetadataMerkleProof(metadata, key);
+    assert.ok(proof !== null, `Proof for "${key}" should not be null`);
+
+    const leafHash = computeMetadataLeafHash(key, metadata[key]);
+    const valid = verifyMerkleProof(leafHash, proof!, root);
+    assert.ok(valid, `Proof for "${key}" should verify against root`);
+  }
+
+  // Non-existent key should return null
+  const badProof = computeMetadataMerkleProof(metadata, 'nonexistent');
+  assert.strictEqual(badProof, null, 'Non-existent key should return null proof');
+
+  console.log('  ✓ Merkle proof generation and verification passed');
+}
+
+function testMerkleProofSingleEntry() {
+  console.log('Testing Merkle proof for single-entry metadata...');
+
+  const metadata = { genome: 'deadbeef' };
+  const root = computeMetadataMerkleRoot(metadata);
+  const proof = computeMetadataMerkleProof(metadata, 'genome');
+
+  assert.ok(proof !== null, 'Proof should exist');
+  assert.strictEqual(proof!.length, 0, 'Single-leaf tree should have empty proof path');
+
+  // Root should equal the leaf hash directly
+  const leafHash = computeMetadataLeafHash('genome', 'deadbeef');
+  assert.deepStrictEqual(root, leafHash, 'Single-leaf root should equal the leaf hash');
+
+  const valid = verifyMerkleProof(leafHash, proof!, root);
+  assert.ok(valid, 'Single-leaf proof should verify');
+
+  console.log('  ✓ Merkle proof single entry passed');
+}
+
+function testMerkleProofTwoEntries() {
+  console.log('Testing Merkle proof for two-entry metadata (ArkadeKitties pattern)...');
+
+  // This matches the ArkadeKitties pattern: generation + genome
+  const metadata = { generation: '0', genome: '733833e4519f1811c5f81b12ab391cb3' };
+  const root = computeMetadataMerkleRoot(metadata);
+
+  // Keys sort: "generation" < "genome"
+  const genLeaf = computeMetadataLeafHash('generation', '0');
+  const genomeLeaf = computeMetadataLeafHash('genome', '733833e4519f1811c5f81b12ab391cb3');
+
+  // Root should be ArkadeAssetBranch(sorted(genLeaf, genomeLeaf))
+  const expectedRoot = computeBranchHash(genLeaf, genomeLeaf);
+  assert.deepStrictEqual(root, expectedRoot, 'Two-leaf root should be branch(sorted(leaf1, leaf2))');
+
+  // Verify proofs for both keys
+  const proofGen = computeMetadataMerkleProof(metadata, 'generation');
+  assert.ok(proofGen !== null && proofGen.length === 1, 'generation proof should have 1 sibling');
+  assert.deepStrictEqual(proofGen![0], genomeLeaf, 'generation sibling should be genome leaf');
+  assert.ok(verifyMerkleProof(genLeaf, proofGen!, root), 'generation proof should verify');
+
+  const proofGenome = computeMetadataMerkleProof(metadata, 'genome');
+  assert.ok(proofGenome !== null && proofGenome.length === 1, 'genome proof should have 1 sibling');
+  assert.deepStrictEqual(proofGenome![0], genLeaf, 'genome sibling should be generation leaf');
+  assert.ok(verifyMerkleProof(genomeLeaf, proofGenome!, root), 'genome proof should verify');
+
+  console.log('  ✓ Merkle proof two entries passed');
+}
+
+function testMerkleProofWrongValue() {
+  console.log('Testing Merkle proof rejects wrong value...');
+
+  const metadata = { name: 'Token', ticker: 'TKN' };
+  const root = computeMetadataMerkleRoot(metadata);
+  const proof = computeMetadataMerkleProof(metadata, 'name');
+  assert.ok(proof !== null);
+
+  // Correct leaf verifies
+  const correctLeaf = computeMetadataLeafHash('name', 'Token');
+  assert.ok(verifyMerkleProof(correctLeaf, proof!, root), 'Correct leaf should verify');
+
+  // Wrong value for same key should NOT verify
+  const wrongLeaf = computeMetadataLeafHash('name', 'FakeToken');
+  assert.ok(!verifyMerkleProof(wrongLeaf, proof!, root), 'Wrong value should not verify');
+
+  console.log('  ✓ Merkle proof rejects wrong value passed');
+}
+
+function testMerkleProofOddLeafCount() {
+  console.log('Testing Merkle proof with odd leaf counts (3, 5, 7)...');
+
+  for (const count of [3, 5, 7]) {
+    const metadata: Record<string, string> = {};
+    for (let i = 0; i < count; i++) {
+      metadata[`key${String(i).padStart(2, '0')}`] = `val${i}`;
+    }
+
+    const root = computeMetadataMerkleRoot(metadata);
+
+    for (const key of Object.keys(metadata)) {
+      const proof = computeMetadataMerkleProof(metadata, key);
+      assert.ok(proof !== null, `Proof for "${key}" should exist (count=${count})`);
+
+      const leaf = computeMetadataLeafHash(key, metadata[key]);
+      assert.ok(
+        verifyMerkleProof(leaf, proof!, root),
+        `Proof for "${key}" should verify (count=${count})`
+      );
+    }
+  }
+
+  console.log('  ✓ Merkle proof odd leaf counts passed');
+}
+
 // ----------------- RUN ALL TESTS -----------------
 
 async function runAllTests() {
@@ -1385,6 +1576,16 @@ async function runAllTests() {
     testVarintAmountBoundaries();
     testLittleEndianIndexEncoding();
     testSelfDelimitingTlv();
+
+    // Taproot-aligned merkle tree tests
+    testTaggedHashDomainSeparation();
+    testLeafUsesArkadeAssetLeafTag();
+    testBranchUsesLexicographicSorting();
+    testMerkleProofGeneration();
+    testMerkleProofSingleEntry();
+    testMerkleProofTwoEntries();
+    testMerkleProofWrongValue();
+    testMerkleProofOddLeafCount();
 
     // Indexer tests
     testIndexerFreshIssuance();

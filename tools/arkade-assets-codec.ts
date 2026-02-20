@@ -612,21 +612,17 @@ export function parseOpReturnScript(buf: Uint8Array): Packet | null {
   }
 }
 
-// ----------------- METADATA MERKLE HASH -----------------
+// ----------------- MERKLE TREE (BIP-341-aligned) -----------------
 
 /**
- * Computes a SHA256 hash using the Web Crypto API (browser) or Node.js crypto.
- * For synchronous use in Node.js, we use a simple implementation.
+ * SHA256 primitive. Uses @noble/hashes if available, otherwise Node.js crypto.
  */
 let sha256Sync: (data: Uint8Array) => Uint8Array;
 
-// Try to use @noble/hashes if available, otherwise fall back to a simple implementation
 try {
-  // Dynamic import for @noble/hashes
   const { sha256 } = require('@noble/hashes/sha256');
   sha256Sync = sha256;
 } catch {
-  // Fallback: use Node.js crypto if available
   try {
     const crypto = require('crypto');
     sha256Sync = (data: Uint8Array): Uint8Array => {
@@ -635,7 +631,6 @@ try {
       return new Uint8Array(hash.digest());
     };
   } catch {
-    // No crypto available - will throw at runtime if used
     sha256Sync = (_: Uint8Array): Uint8Array => {
       throw new Error('No SHA256 implementation available. Install @noble/hashes or use Node.js.');
     };
@@ -643,53 +638,102 @@ try {
 }
 
 /**
+ * Tagged hash as defined by BIP-341:
+ *   tagged_hash(tag, msg) = SHA256(SHA256(tag) || SHA256(tag) || msg)
+ *
+ * Domain-separates different uses of SHA256 so that leaf hashes, branch hashes,
+ * and tweaks can never collide across contexts.
+ */
+const tagHashCache = new Map<string, Uint8Array>();
+
+export function taggedHash(tag: string, msg: Uint8Array): Uint8Array {
+  let tagHash = tagHashCache.get(tag);
+  if (!tagHash) {
+    tagHash = sha256Sync(textEncoder.encode(tag));
+    tagHashCache.set(tag, tagHash);
+  }
+  return sha256Sync(concatBytes(tagHash, tagHash, msg));
+}
+
+/** Leaf version for Arkade metadata key-value entries. */
+export const ARK_LEAF_VERSION = 0x00;
+
+/**
  * Computes the leaf hash for a single metadata key-value pair.
- * leaf = sha256(varuint(len(key)) || key || varuint(len(value)) || value)
+ * Follows the Taproot leaf pattern with an Arkade-specific tag:
+ *
+ *   leaf = tagged_hash("ArkadeAssetLeaf", leaf_version || varuint(len(key)) || key || varuint(len(value)) || value)
+ *
+ * - "ArkadeAssetLeaf" tag provides domain separation from TapLeaf and other tree types
+ * - leaf_version (1 byte, currently 0x00) allows future metadata encoding changes
  */
 export function computeMetadataLeafHash(key: string, value: string): Uint8Array {
   const keyBytes = textEncoder.encode(key);
   const valueBytes = textEncoder.encode(value);
   const data = concatBytes(
+    new Uint8Array([ARK_LEAF_VERSION]),
     encodeVarUint(keyBytes.length),
     keyBytes,
     encodeVarUint(valueBytes.length),
     valueBytes
   );
-  return sha256Sync(data);
+  return taggedHash('ArkadeAssetLeaf', data);
+}
+
+/**
+ * Computes a branch hash following the BIP-341 construction pattern:
+ *
+ *   branch = tagged_hash("ArkadeAssetBranch", min(a, b) || max(a, b))
+ *
+ * Children are lexicographically sorted so that proofs don't need direction bits.
+ * Uses "ArkadeAssetBranch" for domain separation from Taproot's "TapBranch". The
+ * generalized OP_MERKLEPATHVERIFY opcode accepts the branch tag as a parameter,
+ * so both Taproot and Arkade trees are supported without hardcoding tags.
+ */
+export function computeBranchHash(a: Uint8Array, b: Uint8Array): Uint8Array {
+  // Lexicographic comparison — smaller hash comes first
+  let first = a, second = b;
+  for (let i = 0; i < 32; i++) {
+    if (a[i] < b[i]) break;
+    if (a[i] > b[i]) { first = b; second = a; break; }
+  }
+  return taggedHash('ArkadeAssetBranch', concatBytes(first, second));
 }
 
 /**
  * Computes the Merkle root of a metadata map.
  * Keys are sorted lexicographically before hashing.
- * Returns a 32-byte hash.
+ *
+ * Tree construction:
+ * - Leaves: tagged_hash("ArkadeAssetLeaf", version || encoded_entry)
+ * - Branches: tagged_hash("ArkadeAssetBranch", sorted(left, right))
+ * - Odd leaf at any level: promoted to next level (unpaired)
  */
 export function computeMetadataMerkleRoot(metadata: MetadataMap): Uint8Array {
   const keys = Object.keys(metadata).sort();
 
   if (keys.length === 0) {
-    // Empty metadata - return hash of empty string
-    return sha256Sync(new Uint8Array(0));
+    return taggedHash('ArkadeAssetLeaf', new Uint8Array([ARK_LEAF_VERSION]));
   }
 
   // Compute leaf hashes
-  let leaves = keys.map(key => computeMetadataLeafHash(key, metadata[key]));
+  let nodes = keys.map(key => computeMetadataLeafHash(key, metadata[key]));
 
-  // Build Merkle tree
-  while (leaves.length > 1) {
+  // Build tree bottom-up using ArkadeAssetBranch for internal nodes
+  while (nodes.length > 1) {
     const nextLevel: Uint8Array[] = [];
-    for (let i = 0; i < leaves.length; i += 2) {
-      if (i + 1 < leaves.length) {
-        // Hash pair
-        nextLevel.push(sha256Sync(concatBytes(leaves[i], leaves[i + 1])));
+    for (let i = 0; i < nodes.length; i += 2) {
+      if (i + 1 < nodes.length) {
+        nextLevel.push(computeBranchHash(nodes[i], nodes[i + 1]));
       } else {
-        // Odd leaf - promote to next level
-        nextLevel.push(leaves[i]);
+        // Odd node — promote to next level
+        nextLevel.push(nodes[i]);
       }
     }
-    leaves = nextLevel;
+    nodes = nextLevel;
   }
 
-  return leaves[0];
+  return nodes[0];
 }
 
 /**
@@ -697,5 +741,72 @@ export function computeMetadataMerkleRoot(metadata: MetadataMap): Uint8Array {
  */
 export function computeMetadataMerkleRootHex(metadata: MetadataMap): string {
   return bytesToHex(computeMetadataMerkleRoot(metadata));
+}
+
+/**
+ * Computes a Merkle inclusion proof for a specific key in a metadata map.
+ * Returns the list of 32-byte sibling hashes from leaf to root.
+ * Returns null if the key is not present in the metadata.
+ *
+ * To verify: start with computeMetadataLeafHash(key, value), then for each
+ * sibling in the proof, call computeBranchHash(current, sibling). The final
+ * result should equal the Merkle root.
+ */
+export function computeMetadataMerkleProof(metadata: MetadataMap, targetKey: string): Uint8Array[] | null {
+  const keys = Object.keys(metadata).sort();
+  const targetIndex = keys.indexOf(targetKey);
+  if (targetIndex === -1) return null;
+
+  // Compute all leaf hashes
+  let nodes = keys.map(key => computeMetadataLeafHash(key, metadata[key]));
+
+  const proof: Uint8Array[] = [];
+  let idx = targetIndex;
+
+  // Walk up the tree, collecting siblings
+  while (nodes.length > 1) {
+    const nextLevel: Uint8Array[] = [];
+    let nextIdx = -1;
+
+    for (let i = 0; i < nodes.length; i += 2) {
+      if (i + 1 < nodes.length) {
+        // Paired node — record sibling if this pair contains our target
+        if (i === idx) {
+          proof.push(nodes[i + 1]);
+          nextIdx = nextLevel.length;
+        } else if (i + 1 === idx) {
+          proof.push(nodes[i]);
+          nextIdx = nextLevel.length;
+        }
+        nextLevel.push(computeBranchHash(nodes[i], nodes[i + 1]));
+      } else {
+        // Odd node — promoted, no sibling
+        if (i === idx) {
+          nextIdx = nextLevel.length;
+        }
+        nextLevel.push(nodes[i]);
+      }
+    }
+
+    nodes = nextLevel;
+    idx = nextIdx;
+  }
+
+  return proof;
+}
+
+/**
+ * Verifies a Merkle inclusion proof against an expected root.
+ * This is the algorithm a generalized OP_MERKLEPATHVERIFY would execute.
+ *
+ * Uses tagged_hash("ArkadeAssetBranch", sorted(a, b)) at every level.
+ * The caller precomputes the leaf hash.
+ */
+export function verifyMerkleProof(leafHash: Uint8Array, proof: Uint8Array[], expectedRoot: Uint8Array): boolean {
+  let current = leafHash;
+  for (const sibling of proof) {
+    current = computeBranchHash(current, sibling);
+  }
+  return bytesEqual(current, expectedRoot);
 }
 

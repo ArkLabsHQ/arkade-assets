@@ -50,27 +50,34 @@ The `BreedKitties` contract is the heart of the game. It ensures that new Kittie
 pragma arkade ^1.0.0;
 
 // Merkle verification helper for 2-leaf Kitty metadata ("generation" < "genome")
+// Uses tagged hashes for leaves (ArkadeAssetLeaf) and branches (ArkadeAssetBranch).
 function verifyKittyMetadata(genLeaf: bytes32, genomeLeaf: bytes32, root: bytes32) internal returns (bool) {
-    // Keys are sorted lexicographically: generation precedes genome
-    return sha256(genLeaf + genomeLeaf) == root;
+    // Branch uses ArkadeAssetBranch tag with lexicographic sorting
+    // Since children are sorted, order is determined by comparing the two hashes.
+    let first = min(genLeaf, genomeLeaf);
+    let second = max(genLeaf, genomeLeaf);
+    return tagged_hash("ArkadeAssetBranch", first + second) == root;
 }
 
 // Canonical metadata Merkle root for ArkadeKitties (two entries: generation, genome)
-// Encoding follows arkassets.md leaves:
-//   leaf = sha256(varuint(len(key)) || key || varuint(len(value)) || value)
-// Keys sorted: "generation" < "genome". We encode generation as 8-byte big-endian (BE).
+// Encoding follows arkade-assets.md Taproot-aligned leaves:
+//   leaf = tagged_hash("ArkadeAssetLeaf", leaf_version || varuint(len(key)) || key || varuint(len(value)) || value)
+// leaf_version = 0x00. Keys sorted: "generation" < "genome".
+// We encode generation as 8-byte big-endian (BE).
 function computeKittyMetadataRoot(genome: bytes32, generationBE8: bytes8) internal returns (bytes32) {
-    // Precomputed key+length prefixes to avoid dynamic packing:
-    // generation leaf prefix: 0x0a || "generation" || 0x08
-    const GEN_LEAF_PREFIX: bytes = 0x0a67656e65726174696f6e08;
-    // genome leaf prefix: 0x06 || "genome" || 0x20
-    const GENOME_LEAF_PREFIX: bytes = 0x0667656e6f6d6520;
+    // Precomputed key+length prefixes (with leaf_version 0x00 prepended):
+    // generation leaf prefix: 0x00 || 0x0a || "generation" || 0x08
+    const GEN_LEAF_PREFIX: bytes = 0x000a67656e65726174696f6e08;
+    // genome leaf prefix: 0x00 || 0x06 || "genome" || 0x20
+    const GENOME_LEAF_PREFIX: bytes = 0x000667656e6f6d6520;
 
-    let genLeaf = sha256(GEN_LEAF_PREFIX + generationBE8);
-    let genomeLeaf = sha256(GENOME_LEAF_PREFIX + genome);
+    let genLeaf = tagged_hash("ArkadeAssetLeaf", GEN_LEAF_PREFIX + generationBE8);
+    let genomeLeaf = tagged_hash("ArkadeAssetLeaf", GENOME_LEAF_PREFIX + genome);
 
-    // 2-leaf Merkle root
-    return sha256(genLeaf + genomeLeaf);
+    // 2-leaf Merkle root using ArkadeAssetBranch with lexicographic sorting
+    let first = min(genLeaf, genomeLeaf);
+    let second = max(genLeaf, genomeLeaf);
+    return tagged_hash("ArkadeAssetBranch", first + second);
 }
 
 // A simple, deterministic function to mix two genomes (opcode-friendly)
