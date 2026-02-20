@@ -1493,7 +1493,7 @@ function testMerkleProofTwoEntries() {
   const metadata = { generation: '0', genome: '733833e4519f1811c5f81b12ab391cb3' };
   const root = computeMetadataMerkleRoot(metadata);
 
-  // Keys sort: "generation" < "genome"
+  // Leaves follow insertion order: "generation", then "genome"
   const genLeaf = computeMetadataLeafHash('generation', '0');
   const genomeLeaf = computeMetadataLeafHash('genome', '733833e4519f1811c5f81b12ab391cb3');
 

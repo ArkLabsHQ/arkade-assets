@@ -702,7 +702,7 @@ export function computeBranchHash(a: Uint8Array, b: Uint8Array): Uint8Array {
 
 /**
  * Computes the Merkle root of a metadata map.
- * Keys are sorted lexicographically before hashing.
+ * Leaf ordering follows the serialized metadata order (no implicit sorting).
  *
  * Tree construction:
  * - Leaves: tagged_hash("ArkadeAssetLeaf", version || encoded_entry)
@@ -710,7 +710,7 @@ export function computeBranchHash(a: Uint8Array, b: Uint8Array): Uint8Array {
  * - Odd leaf at any level: promoted to next level (unpaired)
  */
 export function computeMetadataMerkleRoot(metadata: MetadataMap): Uint8Array {
-  const keys = Object.keys(metadata).sort();
+  const keys = Object.keys(metadata);
 
   if (keys.length === 0) {
     return taggedHash('ArkadeAssetLeaf', new Uint8Array([ARK_LEAF_VERSION]));
@@ -753,7 +753,7 @@ export function computeMetadataMerkleRootHex(metadata: MetadataMap): string {
  * result should equal the Merkle root.
  */
 export function computeMetadataMerkleProof(metadata: MetadataMap, targetKey: string): Uint8Array[] | null {
-  const keys = Object.keys(metadata).sort();
+  const keys = Object.keys(metadata);
   const targetIndex = keys.indexOf(targetKey);
   if (targetIndex === -1) return null;
 

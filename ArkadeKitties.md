@@ -49,7 +49,7 @@ The `BreedKitties` contract is the heart of the game. It ensures that new Kittie
 ```typescript
 pragma arkade ^1.0.0;
 
-// Merkle verification helper for 2-leaf Kitty metadata ("generation" < "genome")
+// Merkle verification helper for 2-leaf Kitty metadata (generation, genome)
 // Uses tagged hashes for leaves (ArkadeAssetLeaf) and branches (ArkadeAssetBranch).
 function verifyKittyMetadata(genLeaf: bytes32, genomeLeaf: bytes32, root: bytes32) internal returns (bool) {
     // Branch uses ArkadeAssetBranch tag with lexicographic sorting
@@ -62,7 +62,7 @@ function verifyKittyMetadata(genLeaf: bytes32, genomeLeaf: bytes32, root: bytes3
 // Canonical metadata Merkle root for ArkadeKitties (two entries: generation, genome)
 // Encoding follows arkade-assets.md Taproot-aligned leaves:
 //   leaf = tagged_hash("ArkadeAssetLeaf", leaf_version || varuint(len(key)) || key || varuint(len(value)) || value)
-// leaf_version = 0x00. Keys sorted: "generation" < "genome".
+// leaf_version = 0x00. Leaf order follows serialization order: generation, genome.
 // We encode generation as 8-byte big-endian (BE).
 function computeKittyMetadataRoot(genome: bytes32, generationBE8: bytes8) internal returns (bytes32) {
     // Precomputed key+length prefixes (with leaf_version 0x00 prepended):
