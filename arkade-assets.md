@@ -79,7 +79,7 @@ leaf[i] = tagged_hash("ArkadeAssetLeaf", leaf_version || varuint(len(key[i])) ||
 
 - `"ArkadeAssetLeaf"` tag separates Arkade metadata leaves from Taproot's `"TapLeaf"` and from branch hashes
 - `leaf_version` (1 byte, currently `0x00`) enables future metadata encoding formats without changing the tree structure
-- Key-value pairs MUST be sorted by key before hashing to ensure a deterministic root
+- Leaf ordering follows the serialized metadata order in the packet — no implicit sorting is applied
 
 **Branch Construction**
 
