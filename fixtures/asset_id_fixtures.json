@@ -1,0 +1,56 @@
+{
+  "valid": [
+    {
+      "name": "zero index",
+      "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "index": 0,
+      "serializedHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000"
+    },
+    {
+      "name": "max index",
+      "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "index": 65535,
+      "serializedHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaffff"
+    },
+    {
+      "name": "index overflow",
+      "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "index": 65536,
+      "serializedHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000"
+    },
+    {
+      "name": "index underflow",
+      "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "index": -1,
+      "serializedHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaffff"
+    },
+    {
+      "name": "random txid and index",
+      "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "index": 2,
+      "serializedHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0200"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "empty",
+      "serializedHex": "",
+      "description": "string must not be empty"
+    },
+    {
+      "name": "invalid format",
+      "serializedHex": "invalid",
+      "description": "string format must be hex"
+    },
+    {
+      "name": "invalid length",
+      "serializedHex": "000000000000000000000000000000000000000000000000000000000000000001",
+      "description": "invalid asset id length (too short)"
+    },
+    {
+      "name": "empty txid",
+      "serializedHex": "00000000000000000000000000000000000000000000000000000000000000000100",
+      "description": "txid can't be empty (32-byte 0 value)"
+    }
+  ]
+}

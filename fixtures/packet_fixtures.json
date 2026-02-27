@@ -1,0 +1,129 @@
+{
+    "valid": [
+        {
+            "name": "issuance of many assets controlled by a single one",
+            "assets": [
+                {
+                    "controlAsset": {
+                        "groupIndex": 3
+                    },
+                    "outputs": [
+                        {
+                            "amount": 100,
+                            "vout": 1
+                        }
+                    ],
+                    "metadata": [
+                        {
+                            "key": "ticker",
+                            "value": "TEST"
+                        }
+                    ]
+                },
+                {
+                    "controlAsset": {
+                        "groupIndex": 3
+                    },
+                    "outputs": [
+                        {
+                            "amount": 300,
+                            "vout": 1
+                        }
+                    ],
+                    "metadata": [
+                        {
+                            "key": "ticker",
+                            "value": "TEST2"
+                        }
+                    ]
+                },
+                {
+                    "controlAsset": {
+                        "groupIndex": 3
+                    },
+                    "outputs": [
+                        {
+                            "amount": 2100,
+                            "vout": 0
+                        }
+                    ],
+                    "metadata": [
+                        {
+                            "key": "ticker",
+                            "value": "TEST3"
+                        }
+                    ]
+                },
+                {
+                    "outputs": [
+                        {
+                            "amount": 1,
+                            "vout": 2
+                        }
+                    ],
+                    "metadata": [
+                        {
+                            "key": "ticker",
+                            "value": "TEST3"
+                        },
+                        {
+                            "key": "desc",
+                            "value": "control_asset"
+                        }
+                    ]
+                }
+            ],
+            "expectedAmount": 0,
+            "expectedScript": "6a4c7641524b00040602030001067469636b657204544553540001010100640602030001067469636b65720554455354320001010100ac020602030001067469636b65720554455354330001010000b4100402067469636b657205544553543304646573630d636f6e74726f6c5f6173736574000101020001"
+        },
+        {
+            "name": "issuance of self-controlled asset",
+            "assets": [
+                {
+                    "controlAsset": {
+                        "groupIndex": 0
+                    },
+                    "outputs": [
+                        {
+                            "amount": 21000000,
+                            "vout": 0
+                        }
+                    ]
+                }
+            ],
+            "expectedScript": "6a1241524b0001020200000001010000c0de810a"
+        }
+    ],
+    "invalid": [
+        {
+            "name": "empty",
+            "script": "",
+            "description": "string must not be empty"
+        },
+        {
+            "name": "invalid format",
+            "script": "invalid",
+            "description": "string format must be hex"
+        },
+        {
+            "name": "script without OP_RETURN",
+            "script": "5120aea218dfbafdf78db7c6bc58b5916ac65c8705cfa5daef86c478a718da9fc23b",
+            "description": "OP_RETURN not found"
+        },
+        {
+            "name": "invalid OP_RETURN script",
+            "script": "6a41524b00",
+            "description": "invalid OP_RETURN output script"
+        },
+        {
+            "name": "invalid prefix",
+            "script": "6a204152cc0000000000000000000000000000000000000000000000000000000001",
+            "description": "invalid magic prefix"
+        },
+        {
+            "name": "invalid group index",
+            "script": "6a0f41524b000102020100000101e80301",
+            "description": "invalid control asset group index"
+        }
+    ]
+}
