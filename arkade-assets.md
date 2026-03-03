@@ -109,7 +109,7 @@ scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
   - Unknown types: parsers MUST skip `Length` bytes to reach the next record.
   - Duplicate types within a single extension are rejected.
 
-**Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
+**Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, it is rejected.
 
 ### Arkade Asset V1 Packet (Type 0x00)
 
