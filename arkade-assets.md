@@ -105,7 +105,7 @@ scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 - **TLV_Stream**: A concatenation of one or more TLV records.
 - **TLV Record**: `Type(1 byte) || Length(LEB128 varint) || Payload`
   - All packet types use explicit LEB128 varint length framing.
-  - Known types: `0x00` = Arkade Asset, `0x01` = Introspector (reserved).
+  - Known types: `0x00` = Arkade Asset
   - Unknown types: parsers MUST skip `Length` bytes to reach the next record.
   - Duplicate types within a single extension are rejected.
 
