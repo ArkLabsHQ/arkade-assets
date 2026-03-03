@@ -103,22 +103,23 @@ scriptPubKey = OP_RETURN <Magic_Bytes> <TLV_Stream>
 
 - **Magic_Bytes**: `0x41524b` ("ARK")
 - **TLV_Stream**: A concatenation of one or more TLV records.
-- **TLV Record**: Format determined by type byte range:
-  - `0x00-0x3F`: Self-delimiting types. `Type || Payload` (no length field)
-  - `0x40-0x7F`: Variable-length spec types. `Type || Length (varint) || Payload`
-  - `0x80-0xFF`: Extensions. `Type || Length (varint) || Payload` (parsers can skip unknown)
+- **TLV Record**: `Type(1 byte) || Length(LEB128 varint) || Payload`
+  - All packet types use explicit LEB128 varint length framing.
+  - Known types: `0x00` = Arkade Asset
+  - Unknown types: parsers MUST skip `Length` bytes to reach the next record.
+  - Duplicate types within a single extension are rejected.
 
-**Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, only the **first Type `0x00` record found by output index order** is processed. Subsequent Asset records are ignored.
+**Multiple OP_RETURN Handling:** If a transaction contains multiple OP_RETURN outputs with ARK magic bytes (`0x41524b`), or multiple Type `0x00` (Assets) records across TLV streams, it is rejected.
 
 ### Arkade Asset V1 Packet (Type 0x00)
 
-The Arkade Asset data is identified by `Type = 0x00`. As a self-delimiting type (range 0x00-0x3F), no length field is needed.
+The Arkade Asset data is identified by `Type = 0x00`. The length of the asset payload is encoded as a LEB128 varint.
 
 ```
-<Type: 0x00> <Asset_Payload>
+<Type: 0x00> <Length: LEB128 varint> <Asset_Payload>
 ```
 
-- **Asset_Payload**: The TLV packet containing asset group data (see below).
+- **Asset_Payload**: The binary-encoded asset group data (see below).
 
 **Note (Implicit Burn Policy):** If a transaction spends any UTXOs known to carry Arkade Asset balances but contains no `OP_RETURN` with an Arkade Asset packet (Type `0x00`), those balances are considered irrecoverably burned. Indexers MUST remove such balances from their state.
 
@@ -218,10 +219,13 @@ AssetOutput := { vout: u16 LE, amount: varint }   # output within same transacti
 For implementers, here is the complete binary format:
 
 ```
-# OP_RETURN Structure
-OP_RETURN := "ARK" || AssetMarker || Packet
+# OP_RETURN Structure (Extension TLV)
+OP_RETURN := "ARK" || TLV_Record...
 
-AssetMarker := 0x00  # Identifier for op_ret asset data
+TLV_Record := Type(1 byte) || Length(LEB128 varint) || Payload
+
+# Asset TLV Record (Type 0x00)
+AssetRecord := 0x00 || LEB128(len(Packet)) || Packet
 
 # Asset Packet
 Packet := {

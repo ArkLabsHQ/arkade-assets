@@ -270,11 +270,42 @@ function decodeVarUint(buf: Uint8Array, off: number): { value: number; size: num
   return decodeCompactSize(buf, off);
 }
 
+// --- LEB128 varint encoding (used for TLV length framing, matching arkd's binary.ReadUvarint) ---
+
+function encodeLeb128(n: number): Uint8Array {
+  if (n < 0) throw new Error('LEB128 value must be >= 0');
+  const bytes: number[] = [];
+  do {
+    let byte = n & 0x7f;
+    n >>>= 7;
+    if (n !== 0) byte |= 0x80;
+    bytes.push(byte);
+  } while (n !== 0);
+  return new Uint8Array(bytes);
+}
+
+function decodeLeb128(buf: Uint8Array, off: number): { value: number; size: number } {
+  let value = 0;
+  let shift = 0;
+  let i = off;
+  while (i < buf.length) {
+    const byte = buf[i];
+    value |= (byte & 0x7f) << shift;
+    i++;
+    if ((byte & 0x80) === 0) {
+      return { value, size: i - off };
+    }
+    shift += 7;
+    if (shift > 35) throw new Error('LEB128 value too large');
+  }
+  throw new Error('LEB128 truncated');
+}
+
 function encodeTlv(type: number, value: Uint8Array): Uint8Array {
   if (type > 255 || type < 0) throw new Error('TLV type must be a byte');
   return concatBytes(
     new Uint8Array([type]),
-    encodeCompactSize(value.length),
+    encodeLeb128(value.length),
     value
   );
 }
@@ -425,8 +456,8 @@ export function encodePacket(packet: Packet): Uint8Array {
 export function buildOpReturnPayload(packet: Packet): Uint8Array {
   const magic = hexToBytes('41524b'); // "ARK"
   const assetPayload = encodePacket(packet);
-  // Type 0x00 is self-delimiting (no length field)
-  return concatBytes(magic, new Uint8Array([0x00]), assetPayload);
+  // Type 0x00 with LEB128 varint length prefix (matching arkd PR #946)
+  return concatBytes(magic, encodeTlv(0x00, assetPayload));
 }
 
 export function buildOpReturnScript(packet: Packet): Uint8Array {
@@ -442,19 +473,12 @@ function decodeTlvStream(buf: Uint8Array, off: number): { records: { type: numbe
   while (cursor < buf.length) {
     const type = buf[cursor];
     cursor += 1;
-    if (type <= 0x3f) {
-      // Self-delimiting: rest of buffer is the payload
-      const value = buf.slice(cursor);
-      cursor = buf.length;
-      records.push({ type, value });
-    } else {
-      // 0x40-0xFF: length-prefixed
-      const lenResult = decodeCompactSize(buf, cursor);
-      cursor += lenResult.size;
-      const value = buf.slice(cursor, cursor + lenResult.value);
-      cursor += lenResult.value;
-      records.push({ type, value });
-    }
+    // All types use LEB128 varint length prefix (matching arkd PR #946)
+    const lenResult = decodeLeb128(buf, cursor);
+    cursor += lenResult.size;
+    const value = buf.slice(cursor, cursor + lenResult.value);
+    cursor += lenResult.value;
+    records.push({ type, value });
   }
   return { records, next: cursor };
 }

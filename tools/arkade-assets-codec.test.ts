@@ -1038,11 +1038,11 @@ function testLittleEndianIndexEncoding() {
   console.log('  ✓ Little-endian index encoding passed');
 }
 
-function testSelfDelimitingTlv() {
-  console.log('Testing self-delimiting TLV encoding...');
+function testLengthPrefixedTlv() {
+  console.log('Testing LEB128 length-prefixed TLV encoding...');
 
-  // Build a minimal packet and check that the payload uses self-delimiting type 0x00
-  // (no length field), saving 1 byte compared to a length-prefixed TLV.
+  // Build a minimal packet and check that the payload uses type 0x00 with
+  // LEB128 varint length prefix (matching arkd PR #946).
   const packet: Packet = {
     groups: [{
       issuance: { metadata: { name: 'TLV' } },
@@ -1053,46 +1053,33 @@ function testSelfDelimitingTlv() {
 
   const payload = buildOpReturnPayload(packet);
 
-  // Payload format: magic(3) + type(1) + asset_data(variable)
+  // Payload format: magic(3) + type(1) + leb128_length + asset_data(variable)
   // magic = "ARK" = 0x41 0x52 0x4b
   assert.strictEqual(payload[0], 0x41, 'Magic byte 0 should be "A"');
   assert.strictEqual(payload[1], 0x52, 'Magic byte 1 should be "R"');
   assert.strictEqual(payload[2], 0x4b, 'Magic byte 2 should be "K"');
   assert.strictEqual(payload[3], 0x00, 'TLV type should be 0x00');
 
-  // Verify there is NO length field after the type byte.
-  // In self-delimiting format, byte 4 should be the start of the asset payload
-  // (i.e., the group count varint), NOT a length prefix.
-  // A packet with 1 group would have group count = 1 (varint: 0x01).
-  assert.strictEqual(payload[4], 0x01, 'Byte after type should be group count (1), not a length prefix');
+  // Verify there IS a LEB128 length field after the type byte.
+  // Byte 4 should be the LEB128-encoded length of the asset data.
+  // The asset data length should be small enough to fit in one LEB128 byte (<128).
+  const assetDataLength = payload.length - 5; // everything after magic + type + 1-byte length
+  assert.ok(assetDataLength > 0 && assetDataLength < 128,
+    'Asset data should be small enough for 1-byte LEB128');
+  assert.strictEqual(payload[4], assetDataLength,
+    'Byte after type should be LEB128 length of asset data');
+
+  // Byte 5 should be the start of the asset payload (group count = 1).
+  assert.strictEqual(payload[5], 0x01, 'First data byte should be group count (1)');
 
   // Verify the round-trip works correctly
   const script = buildOpReturnScript(packet);
   const decoded = parseOpReturnScript(script);
-  assert.ok(decoded, 'Self-delimiting TLV should decode correctly');
+  assert.ok(decoded, 'Length-prefixed TLV should decode correctly');
   assert.strictEqual(decoded.groups?.length, 1, 'Should have 1 group');
   assert.strictEqual(decoded.groups?.[0].outputs[0].amt, '1', 'Amount should round-trip');
 
-  // Verify payload is 1 byte shorter than it would be with a length field.
-  // With a length field, the format would be: magic(3) + type(1) + compactsize_length + data
-  // Without: magic(3) + type(1) + data
-  // The data portion starts at offset 4 in the self-delimiting format.
-  const assetDataLength = payload.length - 4; // everything after magic + type byte
-  // If we had a length prefix, for small payloads (<253 bytes) it would add 1 byte
-  // So the self-delimiting format saves exactly 1 byte for small payloads.
-  assert.ok(assetDataLength < 253, 'Asset data should be small enough that length prefix would be 1 byte');
-  // The total payload with length-prefix would be: 3(magic) + 1(type) + 1(length) + assetDataLength
-  // Self-delimiting:                               3(magic) + 1(type) + assetDataLength
-  // Difference = 1 byte saved
-  const expectedWithLengthPrefix = 3 + 1 + 1 + assetDataLength;
-  const actualSelfDelimiting = payload.length;
-  assert.strictEqual(
-    expectedWithLengthPrefix - actualSelfDelimiting,
-    1,
-    `Self-delimiting should save exactly 1 byte (expected ${expectedWithLengthPrefix} with length, got ${actualSelfDelimiting} without)`
-  );
-
-  console.log('  ✓ Self-delimiting TLV encoding passed');
+  console.log('  ✓ LEB128 length-prefixed TLV encoding passed');
 }
 
 // ----------------- REORG TESTS -----------------
@@ -1575,7 +1562,7 @@ async function runAllTests() {
     // Compact encoding edge case tests
     testVarintAmountBoundaries();
     testLittleEndianIndexEncoding();
-    testSelfDelimitingTlv();
+    testLengthPrefixedTlv();
 
     // Taproot-aligned merkle tree tests
     testTaggedHashDomainSeparation();
