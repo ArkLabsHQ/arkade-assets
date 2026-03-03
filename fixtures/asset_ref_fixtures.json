@@ -1,0 +1,66 @@
+{
+  "valid": {
+    "assetRefFromId": [
+      {
+        "name": "random",
+        "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "index": 42,
+        "serializedHex": "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2a00"
+      }
+    ],
+    "assetRefFromGroupIndex": [
+      {
+        "name": "zero index",
+        "index": 0,
+        "serializedHex": "020000"
+      },
+      {
+        "name": "random index",
+        "index": 5,
+        "serializedHex": "020500"
+      },
+      {
+        "name": "max index",
+        "index": 65535,
+        "serializedHex": "02ffff"
+      },
+      {
+        "name": "index overflow",
+        "index": 65536,
+        "serializedHex": "020000"
+      },
+      {
+        "name": "index underflow",
+        "index": -1,
+        "serializedHex": "02ffff"
+      }
+    ]
+  },
+  "invalid": [
+    {
+      "name": "empty",
+      "serializedHex": "",
+      "description": "string must not be empty"
+    },
+    {
+      "name": "invalid format",
+      "serializedHex": "invalid",
+      "description": "string format must be hex"
+    },
+    {
+      "name": "invalid ref length",
+      "serializedHex": "0200",
+      "description": "invalid asset ref length (too short)"
+    },
+    {
+      "name": "unspecified ref type",
+      "serializedHex": "000005",
+      "description": "asset ref type unspecified"
+    },
+    {
+      "name": "unknown ref type",
+      "serializedHex": "030005",
+      "description": "asset ref type unknown"
+    }
+  ]
+}
